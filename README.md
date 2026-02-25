@@ -333,7 +333,7 @@ update_nodes({
 ## Building from Source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/n8n-mcp-lite.git
+git clone https://github.com/LunkiBR/n8n-mcp-lite.git
 cd n8n-mcp-lite
 npm install
 npm run build
