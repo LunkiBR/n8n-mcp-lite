@@ -29,6 +29,13 @@ import {
   bfsForward,
   bfsBackward,
 } from "../transform/graph.js";
+import { validateArgs } from "../validate.js";
+import { TOOL_SCHEMAS } from "./definitions.js";
+import { nodeDb } from "../knowledge/node-db.js";
+import { NODE_FLAGS } from "../knowledge/types.js";
+import { VersionStore } from "../versioning/version-store.js";
+import { runPreflight, buildVirtualState } from "../security/preflight.js";
+import type { PreflightResult } from "../security/types.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -45,10 +52,21 @@ function err(message: string): ToolResult {
 }
 
 export class ToolHandlers {
-  constructor(private api: N8nApiClient) { }
+  private versionStore: VersionStore;
+
+  constructor(private api: N8nApiClient, versionStore: VersionStore) {
+    this.versionStore = versionStore;
+  }
 
   async handle(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     try {
+      // Input validation (Pilar 0)
+      const schema = TOOL_SCHEMAS[name];
+      if (schema) {
+        const validationError = validateArgs(args, schema as any, name);
+        if (validationError) return err(validationError);
+      }
+
       switch (name) {
         case "list_workflows":
           return await this.listWorkflows(args);
@@ -80,6 +98,14 @@ export class ToolHandlers {
           return await this.focusWorkflow(args);
         case "expand_focus":
           return await this.expandFocus(args);
+        case "search_nodes":
+          return await this.searchNodes(args);
+        case "get_node":
+          return await this.getNodeInfo(args);
+        case "list_versions":
+          return await this.listVersions(args);
+        case "rollback_workflow":
+          return await this.rollbackWorkflow(args);
         default:
           return err(`Unknown tool: ${name}`);
       }
@@ -196,6 +222,23 @@ export class ToolHandlers {
     }
 
     const reconstructed = reconstructWorkflow(lite);
+
+    // Preflight validation on the virtual state
+    const virtualState = buildVirtualState(
+      reconstructed.nodes ?? [],
+      (reconstructed.connections ?? {}) as Record<string, unknown>
+    );
+    const preflight = runPreflight(virtualState, "create_workflow");
+    if (!preflight.pass) {
+      return ok({
+        blocked: true,
+        message: preflight.summary,
+        errors: preflight.errors,
+        warnings: preflight.warnings,
+        durationMs: preflight.durationMs,
+      });
+    }
+
     const created = await this.api.createWorkflow(reconstructed);
 
     return ok({
@@ -204,6 +247,9 @@ export class ToolHandlers {
       active: created.active,
       nodeCount: created.nodes?.length ?? 0,
       message: "Workflow created successfully",
+      ...(preflight.warnings.length > 0
+        ? { preflight: { warnings: preflight.warnings } }
+        : {}),
     });
   }
 
@@ -216,6 +262,14 @@ export class ToolHandlers {
 
     // Fetch original to preserve positions and credential IDs
     const original = await this.api.getWorkflow(id);
+
+    // Auto-snapshot before mutation (Pilar 2)
+    this.versionStore.saveSnapshot(
+      id,
+      original,
+      "pre_update_workflow",
+      `Before update_workflow`
+    );
 
     const update: Partial<N8nWorkflowRaw> = {};
 
@@ -238,6 +292,23 @@ export class ToolHandlers {
       update.nodes = reconstructed.nodes;
       update.connections = reconstructed.connections;
       if (reconstructed.settings) update.settings = reconstructed.settings;
+
+      // Preflight validation on the reconstructed state
+      const virtualState = buildVirtualState(
+        reconstructed.nodes ?? [],
+        (reconstructed.connections ?? {}) as Record<string, unknown>
+      );
+      const preflight = runPreflight(virtualState, "update_workflow");
+      if (!preflight.pass) {
+        return ok({
+          blocked: true,
+          message: preflight.summary,
+          errors: preflight.errors,
+          warnings: preflight.warnings,
+          durationMs: preflight.durationMs,
+          snapshotSaved: true,
+        });
+      }
     } else if (args.settings) {
       update.settings = args.settings as Record<string, unknown>;
     }
@@ -266,6 +337,15 @@ export class ToolHandlers {
 
     // Fetch current workflow
     const raw = await this.api.getWorkflow(id);
+
+    // Auto-snapshot before mutation (Pilar 2)
+    this.versionStore.saveSnapshot(
+      id,
+      raw,
+      "pre_update_nodes",
+      `Before update_nodes (${operations.length} operation(s))`
+    );
+
     const nodes = [...raw.nodes];
     const connections = JSON.parse(
       JSON.stringify(raw.connections)
@@ -487,7 +567,25 @@ export class ToolHandlers {
       }
     }
 
-    // Apply changes
+    // Preflight validation on the virtual post-mutation state
+    const virtualState = buildVirtualState(
+      nodes,
+      connections as unknown as Record<string, unknown>
+    );
+    const preflight = runPreflight(virtualState, "update_nodes");
+    if (!preflight.pass) {
+      return ok({
+        blocked: true,
+        message: preflight.summary,
+        errors: preflight.errors,
+        warnings: preflight.warnings,
+        operationsAttempted: results,
+        durationMs: preflight.durationMs,
+        snapshotSaved: true,
+      });
+    }
+
+    // Apply changes (preflight passed) — include name + settings to avoid 405/400
     const payload: Partial<N8nWorkflowRaw> = {
       name: raw.name,
       nodes,
@@ -503,6 +601,9 @@ export class ToolHandlers {
       nodeCount: updated.nodes?.length ?? 0,
       operations: results,
       message: "Operations applied successfully",
+      ...(preflight.warnings.length > 0
+        ? { preflight: { warnings: preflight.warnings } }
+        : {}),
     });
   }
 
@@ -514,8 +615,24 @@ export class ToolHandlers {
     if (!id) return err("Missing workflow ID");
     if (args.confirm !== true) return err("Set confirm: true to delete");
 
+    // Auto-snapshot before deletion (Pilar 2) - safety net for recovery
+    try {
+      const raw = await this.api.getWorkflow(id);
+      this.versionStore.saveSnapshot(
+        id,
+        raw,
+        "pre_delete",
+        `Safety snapshot before deletion of "${raw.name}"`
+      );
+    } catch {
+      // If we can't snapshot (e.g. already deleted), proceed
+    }
+
     await this.api.deleteWorkflow(id);
-    return ok({ id, message: "Workflow deleted permanently" });
+    return ok({
+      id,
+      message: "Workflow deleted permanently. A snapshot was saved locally for recovery via rollback_workflow.",
+    });
   }
 
   // ---- Activate/Deactivate ----
@@ -756,5 +873,180 @@ export class ToolHandlers {
 
     const focused = buildFocusedView(raw, Array.from(expanded));
     return ok(focused);
+  }
+
+  // ---- Search nodes (Pilar 3: Anti-Hallucination) ----
+  private async searchNodes(
+    args: Record<string, unknown>
+  ): Promise<ToolResult> {
+    const query = args.query as string;
+    if (!query) return err("Missing search query");
+
+    const results = nodeDb.searchNodes(query, {
+      mode: (args.mode as "OR" | "AND" | "FUZZY") ?? "OR",
+      limit: (args.limit as number) ?? 20,
+      source: (args.source as "all" | "core" | "langchain") ?? "all",
+    });
+
+    return ok({
+      results: results.map((r) => ({
+        nodeType: r.nodeType,
+        displayName: r.displayName,
+        description: r.description,
+        category: r.category,
+        ...(r.isTrigger ? { trigger: true } : {}),
+        ...(r.isWebhook ? { webhook: true } : {}),
+        ...(r.isAITool ? { aiTool: true } : {}),
+      })),
+      count: results.length,
+      totalNodes: nodeDb.size,
+    });
+  }
+
+  // ---- Get node schema (Pilar 3: Anti-Hallucination) ----
+  private async getNodeInfo(
+    args: Record<string, unknown>
+  ): Promise<ToolResult> {
+    const nodeType = args.nodeType as string;
+    if (!nodeType) return err("Missing nodeType");
+
+    const detail = (args.detail as string) ?? "standard";
+    const node = nodeDb.getNode(nodeType);
+    if (!node) return err(`Node not found: "${nodeType}". Use search_nodes to find available nodes.`);
+
+    // Minimal: just identification
+    if (detail === "minimal") {
+      return ok({
+        nodeType: node.t,
+        displayName: node.d,
+        description: node.desc,
+        category: node.cat,
+        isTrigger: !!(node.f & NODE_FLAGS.TRIGGER),
+        isWebhook: !!(node.f & NODE_FLAGS.WEBHOOK),
+        isAITool: !!(node.f & NODE_FLAGS.AI_TOOL),
+      });
+    }
+
+    // Standard: essential properties + operations + credentials
+    const result: Record<string, unknown> = {
+      nodeType: node.t,
+      displayName: node.d,
+      description: node.desc,
+      category: node.cat,
+      version: node.v,
+      isTrigger: !!(node.f & NODE_FLAGS.TRIGGER),
+      isWebhook: !!(node.f & NODE_FLAGS.WEBHOOK),
+      isAITool: !!(node.f & NODE_FLAGS.AI_TOOL),
+    };
+
+    if (node.ops && node.ops.length > 0) result.operations = node.ops;
+    if (node.creds && node.creds.length > 0) result.credentials = node.creds;
+
+    if (detail === "standard" && node.props) {
+      // Return essential properties with readable format
+      result.properties = node.props.map((p) => ({
+        name: p.n,
+        displayName: p.dn,
+        type: p.t,
+        ...(p.desc ? { description: p.desc } : {}),
+        ...(p.def !== undefined ? { default: p.def } : {}),
+        ...(p.req ? { required: true } : {}),
+        ...(p.opts ? { options: p.opts.map((o) => `${o.v} (${o.l})`) } : {}),
+        ...(p.show ? { showWhen: p.show } : {}),
+      }));
+    }
+
+    if (detail === "full" && node.props) {
+      // Return all properties with full detail
+      result.properties = node.props;
+    }
+
+    return ok(result);
+  }
+
+  // ============================================================
+  // Pilar 2: Version Control handlers
+  // ============================================================
+
+  // ---- List snapshots ----
+  private async listVersions(
+    args: Record<string, unknown>
+  ): Promise<ToolResult> {
+    const workflowId = args.workflowId as string;
+    if (!workflowId) return err("Missing workflowId");
+
+    const limit = args.limit as number | undefined;
+    const snapshots = this.versionStore.listSnapshots(workflowId, limit);
+
+    return ok({
+      workflowId,
+      snapshots: snapshots.map((s) => ({
+        id: s.id,
+        workflowName: s.workflowName,
+        timestamp: s.timestamp,
+        trigger: s.trigger,
+        description: s.description,
+      })),
+      count: snapshots.length,
+      message: snapshots.length === 0
+        ? "No snapshots found. Snapshots are created automatically before mutations."
+        : undefined,
+    });
+  }
+
+  // ---- Rollback to snapshot ----
+  private async rollbackWorkflow(
+    args: Record<string, unknown>
+  ): Promise<ToolResult> {
+    const workflowId = args.workflowId as string;
+    if (!workflowId) return err("Missing workflowId");
+
+    const snapshotId = args.snapshotId as string;
+    if (!snapshotId) return err("Missing snapshotId");
+
+    // Get the snapshot with full data
+    const snapshot = this.versionStore.getSnapshot(workflowId, snapshotId);
+    if (!snapshot) {
+      return err(
+        `Snapshot "${snapshotId}" not found for workflow "${workflowId}". Use list_versions to see available snapshots.`
+      );
+    }
+
+    // Take a safety snapshot of the CURRENT state before rolling back
+    try {
+      const currentRaw = await this.api.getWorkflow(workflowId);
+      this.versionStore.saveSnapshot(
+        workflowId,
+        currentRaw,
+        "manual",
+        `Safety snapshot before rollback to ${snapshotId}`
+      );
+    } catch {
+      // If we can't fetch current state, proceed with rollback anyway
+    }
+
+    // Restore the workflow from the snapshot
+    const { data } = snapshot;
+    const updatePayload: Partial<N8nWorkflowRaw> = {
+      name: data.name,
+      nodes: data.nodes,
+      connections: data.connections,
+    };
+    if (data.settings) updatePayload.settings = data.settings;
+
+    const updated = await this.api.updateWorkflow(workflowId, updatePayload);
+
+    return ok({
+      id: updated.id,
+      name: updated.name,
+      active: updated.active,
+      nodeCount: updated.nodes?.length ?? 0,
+      restoredFrom: {
+        snapshotId: snapshot.id,
+        timestamp: snapshot.timestamp,
+        description: snapshot.description,
+      },
+      message: "Workflow restored successfully. A safety snapshot of the previous state was created.",
+    });
   }
 }

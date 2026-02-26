@@ -10,9 +10,18 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+// Resolve project root from the script's own location (immune to cwd changes).
+// NEVER use process.cwd() — Claude Desktop sets cwd=C:\WINDOWS\system32.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const PROJECT_ROOT = join(__dirname, "..");
 import { N8nApiClient } from "./api-client.js";
 import { TOOLS } from "./tools/definitions.js";
 import { ToolHandlers } from "./tools/handlers.js";
+import { VersionStore } from "./versioning/version-store.js";
 
 // ---- Configuration from environment ----
 
@@ -37,7 +46,15 @@ const apiClient = new N8nApiClient({
   timeout: parseInt(process.env.N8N_TIMEOUT ?? "30000", 10),
 });
 
-const handlers = new ToolHandlers(apiClient);
+// Local version store for auto-snapshots and rollback (Pilar 2)
+// Use PROJECT_ROOT (based on import.meta.url) — never process.cwd() which Claude
+// Desktop sets to C:\WINDOWS\system32 (no write permission there).
+const versionStorePath =
+  process.env.N8N_VERSION_STORE_PATH ||
+  join(PROJECT_ROOT, ".versioning");
+const versionStore = new VersionStore(versionStorePath);
+
+const handlers = new ToolHandlers(apiClient, versionStore);
 
 const server = new Server(
   {

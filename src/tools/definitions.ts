@@ -4,6 +4,9 @@
 
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 
+// Map of tool name → inputSchema for validation
+export const TOOL_SCHEMAS: Record<string, Tool["inputSchema"]> = {};
+
 export const TOOLS: Tool[] = [
   // ---- Workflow listing ----
   {
@@ -450,4 +453,103 @@ export const TOOLS: Tool[] = [
       required: ["id", "currentFocus"],
     },
   },
+  // ---- Version Control ----
+  {
+    name: "list_versions",
+    description:
+      "List local snapshots (backups) of a workflow. Snapshots are created automatically before every mutation (update_nodes, update_workflow, delete). Use rollback_workflow to restore a previous version.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        workflowId: {
+          type: "string",
+          description: "Workflow ID to list snapshots for",
+        },
+        limit: {
+          type: "number",
+          description: "Max snapshots to return (default: all)",
+        },
+      },
+      required: ["workflowId"],
+    },
+  },
+
+  {
+    name: "rollback_workflow",
+    description:
+      "Restore a workflow to a previous snapshot. This overwrites the current workflow state with the backed-up version. Use list_versions first to find the snapshot ID.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        workflowId: {
+          type: "string",
+          description: "Workflow ID to rollback",
+        },
+        snapshotId: {
+          type: "string",
+          description: "Snapshot ID to restore (from list_versions)",
+        },
+      },
+      required: ["workflowId", "snapshotId"],
+    },
+  },
+
+  // ---- Node Knowledge: Search ----
+  {
+    name: "search_nodes",
+    description:
+      'Search n8n nodes by keyword. Returns matching nodes with type, description, category, and relevance score. Use mode="OR" for any-word match (default), "AND" for all-words, "FUZZY" for typo-tolerant. Use this BEFORE creating or updating nodes to find the correct node type.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: 'Search terms (e.g. "slack", "http request", "google sheets")',
+        },
+        mode: {
+          type: "string",
+          enum: ["OR", "AND", "FUZZY"],
+          description: "Search mode: OR (any word, default), AND (all words), FUZZY (typo-tolerant)",
+        },
+        limit: {
+          type: "number",
+          description: "Max results (default 20)",
+        },
+        source: {
+          type: "string",
+          enum: ["all", "core", "langchain"],
+          description: "Filter by package source",
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  // ---- Node Knowledge: Get Schema ----
+  {
+    name: "get_node",
+    description:
+      'Get official node schema: properties, operations, credentials. Use detail="minimal" (~200 tokens) for quick lookup, "standard" (default, ~1K tokens) for essential config info, "full" for everything. ALWAYS use this before configuring a node to avoid hallucinating parameters.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        nodeType: {
+          type: "string",
+          description:
+            'Node type (e.g. "httpRequest", "nodes-base.slack", "slack"). Supports short names.',
+        },
+        detail: {
+          type: "string",
+          enum: ["minimal", "standard", "full"],
+          description: 'Detail level: "minimal", "standard" (default), "full"',
+        },
+      },
+      required: ["nodeType"],
+    },
+  },
 ];
+
+// Build schema map for validation
+for (const tool of TOOLS) {
+  TOOL_SCHEMAS[tool.name] = tool.inputSchema;
+}
