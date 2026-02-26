@@ -97,7 +97,7 @@ export class N8nApiClient {
     workflow: Partial<N8nWorkflowRaw>
   ): Promise<N8nWorkflowRaw> {
     return this.request<N8nWorkflowRaw>(`/workflows/${id}`, {
-      method: "PATCH",
+      method: "PUT",
       body: workflow,
     });
   }

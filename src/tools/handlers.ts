@@ -45,7 +45,7 @@ function err(message: string): ToolResult {
 }
 
 export class ToolHandlers {
-  constructor(private api: N8nApiClient) {}
+  constructor(private api: N8nApiClient) { }
 
   async handle(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     try {
@@ -488,10 +488,14 @@ export class ToolHandlers {
     }
 
     // Apply changes
-    const updated = await this.api.updateWorkflow(id, {
+    const payload: Partial<N8nWorkflowRaw> = {
+      name: raw.name,
       nodes,
       connections,
-    });
+    };
+    if (raw.settings) payload.settings = raw.settings;
+
+    const updated = await this.api.updateWorkflow(id, payload);
 
     return ok({
       id: updated.id,
