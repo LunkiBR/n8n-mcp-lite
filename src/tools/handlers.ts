@@ -40,6 +40,7 @@ import { VersionStore } from "../versioning/version-store.js";
 import { runPreflight, buildVirtualState } from "../security/preflight.js";
 import type { PreflightResult } from "../security/types.js";
 import { knowledgeDb } from "../knowledge/pattern-db.js";
+import { ApprovalStore } from "../approval/approval-store.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -57,9 +58,56 @@ function err(message: string): ToolResult {
 
 export class ToolHandlers {
   private versionStore: VersionStore;
+  private approvalStore: ApprovalStore;
 
-  constructor(private api: N8nApiClient, versionStore: VersionStore) {
+  constructor(
+    private api: N8nApiClient,
+    versionStore: VersionStore,
+    approvalStore: ApprovalStore
+  ) {
     this.versionStore = versionStore;
+    this.approvalStore = approvalStore;
+  }
+
+  /**
+   * Approval gate helper.
+   * - If approval mode is OFF → returns null (proceed normally).
+   * - If approval mode is ON and no token → returns a pending response.
+   * - If approval mode is ON and token is valid → returns null (proceed, token consumed).
+   * - If approval mode is ON and token is invalid/expired → returns an error response.
+   */
+  private checkApproval(
+    tool: string,
+    args: Record<string, unknown>,
+    summary: string,
+    workflowId?: string
+  ): ToolResult | null {
+    if (!this.approvalStore.isEnabled()) return null;
+
+    const token = args.approve as string | undefined;
+    if (!token) {
+      const pendingToken = this.approvalStore.createPending(tool, summary);
+      // Log the pending request
+      this.approvalStore.appendAuditLog(tool, workflowId ?? null, summary, false, "pending");
+      return ok({
+        pending: true,
+        message: `Approval required: ${summary}`,
+        approve_token: pendingToken,
+        instructions: `Call this tool again with the same arguments plus: "approve": "${pendingToken}"`,
+        expires_in: "10 minutes",
+      });
+    }
+
+    const pending = this.approvalStore.consumePending(token);
+    if (!pending) {
+      return err(
+        `Invalid or expired approval token "${token}". ` +
+        `Call the tool without "approve" to generate a new token.`
+      );
+    }
+
+    // Token is valid — caller may proceed
+    return null;
   }
 
   async handle(name: string, args: Record<string, unknown>): Promise<ToolResult> {
@@ -125,6 +173,8 @@ export class ToolHandlers {
           return this.searchExpressions(args);
         case "test_node":
           return await this.testNode(args);
+        case "set_approval_mode":
+          return this.setApprovalMode(args);
         default:
           return err(`Unknown tool: ${name}`);
       }
@@ -223,6 +273,14 @@ export class ToolHandlers {
 
     if (liteNodes.length === 0) return err("At least one node is required");
 
+    // Approval gate
+    const approvalBlock = this.checkApproval(
+      "create_workflow",
+      args,
+      `Create workflow "${name}" with ${liteNodes.length} node(s)`
+    );
+    if (approvalBlock) return approvalBlock;
+
     const lite: LiteWorkflow = {
       id: "",
       name,
@@ -260,6 +318,14 @@ export class ToolHandlers {
 
     const created = await this.api.createWorkflow(reconstructed);
 
+    this.approvalStore.appendAuditLog(
+      "create_workflow",
+      created.id ?? null,
+      `Created workflow "${created.name}" (${created.nodes?.length ?? 0} nodes)`,
+      true,
+      created.id
+    );
+
     return ok({
       id: created.id,
       name: created.name,
@@ -278,6 +344,15 @@ export class ToolHandlers {
   ): Promise<ToolResult> {
     const id = args.id as string;
     if (!id) return err("Missing workflow ID");
+
+    // Approval gate (before any API calls)
+    const approvalBlock = this.checkApproval(
+      "update_workflow",
+      args,
+      `Update workflow ${id}${args.name ? ` ("${args.name}")` : ""}`,
+      id
+    );
+    if (approvalBlock) return approvalBlock;
 
     // Fetch original to preserve positions and credential IDs
     const original = await this.api.getWorkflow(id);
@@ -334,6 +409,14 @@ export class ToolHandlers {
 
     const updated = await this.api.updateWorkflow(id, update);
 
+    this.approvalStore.appendAuditLog(
+      "update_workflow",
+      id,
+      `Updated workflow "${updated.name ?? id}" (${updated.nodes?.length ?? 0} nodes)`,
+      true,
+      id
+    );
+
     return ok({
       id: updated.id,
       name: updated.name,
@@ -353,6 +436,16 @@ export class ToolHandlers {
     const operations = args.operations as Array<Record<string, unknown>>;
     if (!operations || operations.length === 0)
       return err("No operations provided");
+
+    // Approval gate (before any API calls)
+    const opNames = operations.map((o) => String(o.op ?? "?")).join(", ");
+    const approvalBlock = this.checkApproval(
+      "update_nodes",
+      args,
+      `update_nodes on workflow ${id}: [${opNames}] (${operations.length} op(s))`,
+      id
+    );
+    if (approvalBlock) return approvalBlock;
 
     // Fetch current workflow
     const raw = await this.api.getWorkflow(id);
@@ -633,6 +726,14 @@ export class ToolHandlers {
 
     const updated = await this.api.updateWorkflow(id, payload);
 
+    this.approvalStore.appendAuditLog(
+      "update_nodes",
+      id,
+      `update_nodes on "${updated.name ?? id}": [${results.join("; ")}]`,
+      true,
+      id
+    );
+
     return ok({
       id: updated.id,
       name: updated.name,
@@ -653,9 +754,20 @@ export class ToolHandlers {
     if (!id) return err("Missing workflow ID");
     if (args.confirm !== true) return err("Set confirm: true to delete");
 
+    // Approval gate (before any API calls)
+    const approvalBlock = this.checkApproval(
+      "delete_workflow",
+      args,
+      `PERMANENTLY DELETE workflow ${id}`,
+      id
+    );
+    if (approvalBlock) return approvalBlock;
+
     // Auto-snapshot before deletion (Pilar 2) - safety net for recovery
+    let workflowName = id;
     try {
       const raw = await this.api.getWorkflow(id);
+      workflowName = raw.name ?? id;
       this.versionStore.saveSnapshot(
         id,
         raw,
@@ -667,6 +779,15 @@ export class ToolHandlers {
     }
 
     await this.api.deleteWorkflow(id);
+
+    this.approvalStore.appendAuditLog(
+      "delete_workflow",
+      id,
+      `DELETED workflow "${workflowName}" (id: ${id})`,
+      true,
+      "deleted"
+    );
+
     return ok({
       id,
       message: "Workflow deleted permanently. A snapshot was saved locally for recovery via rollback_workflow.",
@@ -1300,6 +1421,20 @@ export class ToolHandlers {
   // ============================================================
   // Dry-Run: Test Node
   // ============================================================
+
+  // ---- Approval mode toggle ----
+  private setApprovalMode(args: Record<string, unknown>): ToolResult {
+    const enabled = args.enabled as boolean;
+    if (typeof enabled !== "boolean") return err("enabled must be a boolean");
+    this.approvalStore.setEnabled(enabled);
+    return ok({
+      approval_mode: enabled,
+      message: enabled
+        ? "Approval mode ON. Mutating tools (create_workflow, update_workflow, update_nodes, delete_workflow) will require an approve token before executing."
+        : "Approval mode OFF. Mutations execute immediately.",
+      audit_log: "All mutations are still logged to .versioning/audit.log",
+    });
+  }
 
   private async testNode(args: Record<string, unknown>): Promise<ToolResult> {
     const nodeSpec = args.node as Record<string, unknown>;

@@ -126,6 +126,11 @@ export const TOOLS: Tool[] = [
           items: { type: "string" },
           description: "Optional tag names",
         },
+        approve: {
+          type: "string",
+          description:
+            "Approval token (only required when approval mode is enabled). First call this tool without approve to get a token, then call again with the token to execute.",
+        },
       },
       required: ["name", "nodes", "flow"],
     },
@@ -160,6 +165,11 @@ export const TOOLS: Tool[] = [
         settings: {
           type: "object",
           description: "Updated settings (optional)",
+        },
+        approve: {
+          type: "string",
+          description:
+            "Approval token (only required when approval mode is enabled). First call this tool without approve to get a token, then call again with the token to execute.",
         },
       },
       required: ["id"],
@@ -202,6 +212,11 @@ export const TOOLS: Tool[] = [
             required: ["op"],
           },
         },
+        approve: {
+          type: "string",
+          description:
+            "Approval token (only required when approval mode is enabled). First call this tool without approve to get a token, then call again with the token to execute.",
+        },
       },
       required: ["id", "operations"],
     },
@@ -222,6 +237,11 @@ export const TOOLS: Tool[] = [
         confirm: {
           type: "boolean",
           description: "Must be true to confirm deletion",
+        },
+        approve: {
+          type: "string",
+          description:
+            "Approval token (only required when approval mode is enabled). First call this tool without approve to get a token, then call again with the token to execute.",
         },
       },
       required: ["id", "confirm"],
@@ -701,6 +721,23 @@ export const TOOLS: Tool[] = [
         },
       },
       required: ["node", "mockInput"],
+    },
+  },
+
+  // ---- Approval mode toggle ----
+  {
+    name: "set_approval_mode",
+    description:
+      "Enable or disable approval mode for this session. When enabled, mutating tools (create_workflow, update_workflow, update_nodes, delete_workflow) require an explicit approve token before executing — preventing accidental changes. Can also be enabled at startup via the N8N_REQUIRE_APPROVAL=true environment variable. All mutations are logged to .versioning/audit.log regardless of this setting.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        enabled: {
+          type: "boolean",
+          description: "true to require approval on mutations, false to disable",
+        },
+      },
+      required: ["enabled"],
     },
   },
 ];

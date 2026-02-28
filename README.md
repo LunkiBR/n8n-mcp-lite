@@ -1,6 +1,6 @@
 # n8n-mcp-lite
 
-Token-optimized MCP Server for n8n workflows. **80%+ token reduction** compared to the standard n8n MCP server, plus **Focus Mode**, **Security Preflight**, **Auto-Versioning**, a built-in **Node Knowledge DB** (1,236 nodes), **Ghost Payload hints**, and **Smart Summaries**.
+Token-optimized MCP Server for n8n workflows. **80%+ token reduction** compared to the standard n8n MCP server, plus **Focus Mode**, **Security Preflight**, **Auto-Versioning**, a built-in **Node Knowledge DB** (1,236 nodes), **Ghost Payload hints**, **Smart Summaries**, and an **Approval Gate + Audit Log** for team environments.
 
 ## The Problem
 
@@ -26,6 +26,7 @@ Even with the simplified format, large workflows with AI Agents (huge system pro
 6. **Smart Summaries** — `scan_workflow` shows meaningful previews: IF conditions, Switch labels, AI prompts, Code snippets, Set field names
 7. **Ghost Payload** — `focus_workflow` with an `executionId` injects `inputHint` showing which `$json` fields are available at each focused node
 8. **Node Dry-Run** — `test_node` runs a single node with mock data via a temporary workflow, without touching production
+9. **Approval Gate** — Optional per-session confirmation tokens for all mutations, with an append-only audit log in `.versioning/audit.log`
 
 | Feature | n8n-mcp (standard) | n8n-mcp-lite |
 |---------|---------------------|--------------|
@@ -41,6 +42,7 @@ Even with the simplified format, large workflows with AI Agents (huge system pro
 | Node schema lookup | None | 1,236 nodes built-in |
 | Input field hints | None | Ghost Payload via `executionId` |
 | Node testing | None | `test_node` with mock data |
+| Change control | None | Approval gate + audit log |
 
 ## Quick Start
 
@@ -158,7 +160,7 @@ For best results, add the contents of [`SYSTEM_PROMPT.md`](./SYSTEM_PROMPT.md) t
 
 > `N8N_API_URL` is also accepted as an alias for `N8N_HOST`.
 
-## Tools (26 total)
+## Tools (27 total)
 
 ### Reading
 
@@ -171,9 +173,9 @@ For best results, add the contents of [`SYSTEM_PROMPT.md`](./SYSTEM_PROMPT.md) t
 | `focus_workflow` | **Focus Mode** — Full detail for selected nodes only, dormant summaries for the rest. Accepts optional `executionId` for **Ghost Payload** hints |
 | `expand_focus` | **Focus Mode** — Grow focus area by adding upstream/downstream/specific nodes |
 
-### Writing (with Security Preflight + Auto-Snapshot)
+### Writing (with Security Preflight + Auto-Snapshot + Optional Approval Gate)
 
-All write operations automatically run **Security Preflight** before sending to n8n, and create an **auto-snapshot** you can roll back to.
+All write operations automatically run **Security Preflight** before sending to n8n, create an **auto-snapshot** you can roll back to, and are recorded in `.versioning/audit.log`.
 
 | Tool | Description |
 |------|-------------|
@@ -181,6 +183,7 @@ All write operations automatically run **Security Preflight** before sending to 
 | `update_workflow` | Full replacement from simplified format (preserves positions/creds) |
 | `update_nodes` | Surgical operations: addNode, removeNode, updateNode, addConnection, removeConnection, enable, disable, rename |
 | `delete_workflow` | Permanent deletion (requires `confirm: true`) |
+| `set_approval_mode` | **Approval Gate** — Enable/disable per-session approval tokens for all mutations |
 
 ### Activation & Execution
 
@@ -247,6 +250,52 @@ Every mutation (`create_workflow`, `update_workflow`, `update_nodes`) runs throu
   "recommendation": "Fix the errors above before retrying"
 }
 ```
+
+## Approval Gate & Audit Log
+
+For teams that need change control before mutations reach n8n:
+
+### Enable approval mode
+
+**At startup** — set `N8N_REQUIRE_APPROVAL=true` in your MCP config:
+```json
+"env": {
+  "N8N_HOST": "...",
+  "N8N_API_KEY": "...",
+  "N8N_REQUIRE_APPROVAL": "true"
+}
+```
+
+**At session start** — call the tool once before any mutations:
+```
+set_approval_mode({ enabled: true })
+```
+
+### How it works
+
+When approval mode is ON, any call to `create_workflow`, `update_workflow`, `update_nodes`, or `delete_workflow` **without** an `approve` token returns a pending response:
+
+```json
+{
+  "pending": true,
+  "message": "Approval required: Update workflow 123",
+  "approve_token": "APPROVE_m5kf3c_A7X2",
+  "instructions": "Call this tool again with the same arguments plus: \"approve\": \"APPROVE_m5kf3c_A7X2\"",
+  "expires_in": "10 minutes"
+}
+```
+
+Present this to the user. When they confirm, call the same tool again with `"approve": "<token>"` added — the mutation executes.
+
+### Audit log
+
+All mutations (approved or pending) are appended to `.versioning/audit.log` as JSON lines, regardless of whether approval mode is on:
+
+```json
+{"timestamp":"2026-02-28T10:00:00.000Z","tool":"update_nodes","workflowId":"abc123","summary":"update_nodes on \"My Workflow\": [Added node \"Slack\"]","approved":true,"result":"abc123"}
+```
+
+The audit log is append-only and non-fatal (a write failure never breaks tool execution).
 
 ## Auto-Versioning & Rollback
 
@@ -491,7 +540,7 @@ The project includes a comprehensive benchmark suite (`benchmark.mjs`) covering 
 npm run build && node benchmark.mjs
 ```
 
-### Coverage (54 tests, 7 areas)
+### Coverage (63 tests, 8 areas)
 
 #### 1. Smart Summaries
 
@@ -572,6 +621,20 @@ npm run build && node benchmark.mjs
 | `focus_workflow` without `executionId` | No change in behavior |
 | Partial execution data structure | No crash |
 | Empty runs array | Node skipped silently |
+
+#### 8. Approval Store
+
+| Case | Expected |
+|------|----------|
+| Default state | Disabled (mutations execute immediately) |
+| `setEnabled(true/false)` | Toggles approval gate |
+| `initialEnabled=true` (from env var) | Starts enabled |
+| `createPending()` | Returns `APPROVE_`-prefixed token |
+| `consumePending()` — valid token | Returns op, deletes token |
+| `consumePending()` — replayed token | Returns `null` (one-use only) |
+| `consumePending()` — invalid token | Returns `null` |
+| `appendAuditLog()` | Does not throw |
+| Tokens are in-memory per instance | Different instances cannot share tokens |
 
 ## License
 

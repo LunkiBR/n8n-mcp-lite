@@ -390,6 +390,75 @@ test("extractExecutionRunData: runs array vazio → node ignorado", () => {
   assert(map["A"] === undefined, "empty runs should be skipped");
 });
 
+// ─── 8. Approval Store ───────────────────────────────────────────────────────
+
+import { ApprovalStore } from "./dist/approval/approval-store.js";
+
+section("8. Approval Store");
+
+const approvalDir = ".versioning";
+
+test("starts disabled by default", () => {
+  const store = new ApprovalStore(approvalDir, false);
+  assert(!store.isEnabled(), "should be disabled");
+});
+
+test("setEnabled toggles mode", () => {
+  const store = new ApprovalStore(approvalDir, false);
+  store.setEnabled(true);
+  assert(store.isEnabled());
+  store.setEnabled(false);
+  assert(!store.isEnabled());
+});
+
+test("starts enabled when initialEnabled=true", () => {
+  const store = new ApprovalStore(approvalDir, true);
+  assert(store.isEnabled());
+});
+
+test("createPending returns APPROVE_ prefixed token", () => {
+  const store = new ApprovalStore(approvalDir, true);
+  const tok = store.createPending("create_workflow", "Create test wf");
+  assert(tok.startsWith("APPROVE_"), `unexpected token: ${tok}`);
+});
+
+test("consumePending: valid token returns op and deletes it", () => {
+  const store = new ApprovalStore(approvalDir, true);
+  const tok = store.createPending("update_workflow", "Update wf 123");
+  const op = store.consumePending(tok);
+  assert(op !== null, "should return op");
+  assert(op.tool === "update_workflow", `wrong tool: ${op?.tool}`);
+  assert(op.summary === "Update wf 123");
+});
+
+test("consumePending: token cannot be replayed", () => {
+  const store = new ApprovalStore(approvalDir, true);
+  const tok = store.createPending("delete_workflow", "Delete wf 456");
+  store.consumePending(tok);
+  const replay = store.consumePending(tok);
+  assert(replay === null, "replay should fail");
+});
+
+test("consumePending: invalid token returns null", () => {
+  const store = new ApprovalStore(approvalDir, true);
+  assert(store.consumePending("APPROVE_INVALID_XYZ") === null);
+});
+
+test("appendAuditLog: does not throw", () => {
+  const store = new ApprovalStore(approvalDir, true);
+  // Should not throw
+  store.appendAuditLog("create_workflow", "wf-99", "Created test", true, "wf-99");
+  store.appendAuditLog("delete_workflow", "wf-77", "Deleted", false, "pending");
+  assert(true, "no throw");
+});
+
+test("pending ops are isolated per store instance", () => {
+  const s1 = new ApprovalStore(approvalDir, true);
+  const s2 = new ApprovalStore(approvalDir, true);
+  const tok = s1.createPending("update_nodes", "ops");
+  assert(s2.consumePending(tok) === null, "different instance should not see token");
+});
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${"═".repeat(64)}`);

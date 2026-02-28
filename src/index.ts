@@ -22,6 +22,7 @@ import { N8nApiClient } from "./api-client.js";
 import { TOOLS } from "./tools/definitions.js";
 import { ToolHandlers } from "./tools/handlers.js";
 import { VersionStore } from "./versioning/version-store.js";
+import { ApprovalStore } from "./approval/approval-store.js";
 
 // ---- Configuration from environment ----
 
@@ -54,7 +55,13 @@ const versionStorePath =
   join(PROJECT_ROOT, ".versioning");
 const versionStore = new VersionStore(versionStorePath);
 
-const handlers = new ToolHandlers(apiClient, versionStore);
+// Optional approval gate — enabled via env var or set_approval_mode tool at runtime
+const requireApproval =
+  process.env.N8N_REQUIRE_APPROVAL === "true" ||
+  process.env.N8N_REQUIRE_APPROVAL === "1";
+const approvalStore = new ApprovalStore(versionStorePath, requireApproval);
+
+const handlers = new ToolHandlers(apiClient, versionStore, approvalStore);
 
 const server = new Server(
   {
@@ -110,6 +117,9 @@ async function main() {
   await server.connect(transport);
   console.error("n8n-mcp-lite server started (stdio transport)");
   console.error(`Connected to: ${N8N_HOST}`);
+  if (requireApproval) {
+    console.error("Approval mode: ON (mutations require explicit approve token)");
+  }
 }
 
 main().catch((error) => {
