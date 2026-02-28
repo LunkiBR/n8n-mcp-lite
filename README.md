@@ -1,8 +1,9 @@
 # n8n-mcp-lite
 
-**Token-optimized Model Context Protocol server for n8n workflows.**
+**MCP redesigned for real-world workflow scale.**
 
-A reference implementation for context-efficient AI automation — built for production, designed for scale.
+> If your n8n workflow has more than ~40 nodes, standard MCP becomes structurally unusable.
+> n8n-mcp-lite remains viable.
 
 ---
 
@@ -16,9 +17,72 @@ Measured on identical workflows. Token counts via the OpenAI tokenizer.
 | 78-node workflow | ~600,000+ tokens | ~16,500 tokens | **97%** |
 | Focus on 2 nodes (from 38) | ~135,000 tokens | ~2,600 tokens | **98%** |
 
-Standard MCP implementations serialize the full workflow graph on every context turn. In large workflows, this produces token counts that exceed practical context windows entirely, making reliable AI assistance structurally impossible above a certain workflow size.
+Above ~50 nodes, standard MCP stops being context-viable. n8n-mcp-lite remains usable.
+
+Standard MCP implementations serialize the full workflow graph on every context turn. In large workflows, this produces token counts that exceed practical context windows entirely — making reliable AI assistance structurally impossible above a certain workflow size.
 
 n8n-mcp-lite addresses this at the architecture level, not through compression or summarization hacks.
+
+---
+
+## Who This Is For
+
+**n8n users with growing workflows**
+- Want AI to help manage, debug, and extend workflows safely
+- Don't want to understand n8n JSON internals
+- Need confidence that AI won't break production
+
+**Developers building production automation**
+- Care about deterministic serialization
+- Need selective context for large workflows
+- Want rollback and structural guarantees before any mutation
+- Build workflows with 30, 50, 100+ nodes
+
+---
+
+## Quick Start
+
+1. Complete installation for your client ([Cursor](#cursor) / [Claude Desktop](#claude-desktop)).
+2. Ask your AI assistant: *"List my n8n workflows."*
+3. Ask: *"Scan workflow [name]."* — returns a lightweight overview without loading full JSON.
+4. Ask: *"Focus on [node name]."* — loads only the nodes you need.
+5. Make changes. Every mutation runs security checks and creates an auto-snapshot before touching n8n.
+
+No n8n internals knowledge required. The server handles format translation, validation, and context management automatically.
+
+---
+
+## 5-Minute Validation Test
+
+After installation:
+
+1. Ask: *"List my workflows."*
+2. Pick a workflow with 30+ nodes. Ask: *"Scan it."*
+3. Note the token estimate in the response.
+4. Compare it to the raw JSON size of that workflow.
+5. Ask: *"Focus on [one node name]."* — see how much context drops further.
+
+If you have a workflow above 50 nodes, the difference will be immediately visible.
+
+---
+
+## Real-World Scenarios
+
+**Large workflows (50+ nodes)**
+
+Standard MCP sends the entire workflow graph on every turn. At scale, this exceeds context windows entirely — responses degrade or fail. n8n-mcp-lite sends only what's needed, keeping interaction viable regardless of workflow size.
+
+**Debugging broken expressions**
+
+Ghost Payload attaches an `inputHint` to each focused node showing the exact `$json` field names arriving from upstream — pulled from real execution data. No more guessing what fields exist.
+
+**Safe AI refactoring**
+
+Every mutation runs a 7-layer security preflight before touching the n8n API. Hardcoded credentials, broken expressions, SQL injection patterns, and structural errors are caught and blocked. The API is never called on a failing check.
+
+**Recovering from a bad change**
+
+Every mutation auto-snapshots the workflow before executing. `rollback_workflow` restores any prior state exactly. Up to 20 snapshots per workflow, automatically pruned.
 
 ---
 
@@ -125,21 +189,11 @@ The server communicates over `stdin`/`stdout` using the standard MCP protocol. N
 
 ---
 
-## Quick Start
-
-For users new to MCP or n8n automation:
-
-1. Complete installation for your client (above).
-2. Ask your AI assistant: *"List my n8n workflows."*
-3. Ask: *"Scan workflow [name]."* — the server returns a lightweight overview.
-4. Ask: *"Focus on [node name]."* — the server loads only what you need.
-5. Make changes. Every mutation auto-snapshots and runs security checks before touching n8n.
-
-No n8n internals knowledge required. The server handles format translation, validation, and context management automatically.
-
----
-
 ## Architecture
+
+### Why This Exists
+
+AI-assisted automation breaks at scale because of context inflation. Standard MCP was not designed for workflows that grow past a few dozen nodes. n8n-mcp-lite is a serialization layer designed for AI reasoning — not a wrapper around the n8n API.
 
 ### The Core Problem
 
@@ -313,15 +367,36 @@ All configuration is via environment variables passed through the MCP client con
 
 ## Design Principles
 
-**Focus over breadth.** The model should receive the minimum context necessary to complete the task correctly. Sending more is not safer — it is noisier.
+**Context is a resource. Waste is architectural failure.**
+The model should receive the minimum context necessary to complete the task correctly. Sending more is not safer — it is noisier.
 
-**Deterministic structure.** LiteNode format is predictable. The same workflow produces the same serialized output on every call. The model can reason about structure without compensating for variance.
+**Determinism is not optional.**
+LiteNode format is predictable. The same workflow produces the same serialized output on every call. The model can reason about structure without compensating for variance.
 
-**Safety before execution.** No mutation reaches the n8n API without passing preflight. No preflight-passing mutation executes without a prior snapshot. Rollback is always available.
+**Safety before execution — without exception.**
+No mutation reaches the n8n API without passing preflight. No preflight-passing mutation executes without a prior snapshot. Rollback is always available.
 
-**Model-agnostic design.** The server makes no assumptions about which model is on the other side of the MCP boundary. The protocol and the format work identically across all compliant clients.
+**The model is a client, not a collaborator in protocol design.**
+The server makes no assumptions about which model is on the other side of the MCP boundary. The protocol and the format work identically across all compliant clients.
 
-**Minimal surface, maximum capability.** 26 tools cover the complete workflow lifecycle — create, read, update, delete, activate, debug, rollback, and learn — without redundancy.
+**Minimal surface, maximum capability.**
+26 tools cover the complete workflow lifecycle — create, read, update, delete, activate, debug, rollback, and learn — without redundancy.
+
+---
+
+## Feedback Wanted
+
+This project is actively optimizing for real-world production cases, not toy examples.
+
+If you're running workflows above 50 nodes, open an issue with:
+
+- Node count
+- Token estimate from `scan_workflow`
+- Your use case (what you're trying to do with AI assistance)
+
+Edge cases from real workflows directly shape what gets built next.
+
+→ [Open an issue](https://github.com/LunkiBR/n8n-mcp-lite/issues)
 
 ---
 
