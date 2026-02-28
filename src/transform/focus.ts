@@ -12,6 +12,7 @@ import type {
   DormantNode,
   NodeZone,
   ExecutionRunDataMap,
+  NodeOutputData,
 } from "../types.js";
 
 import {
@@ -100,7 +101,8 @@ export function generateNodeSummary(
           : meaningful;
       return `${langShort}: ${trunc}`;
     }
-    return `${langShort} code (${code.length} chars)`;
+    // Bug #1 fix: all lines were comments/imports — say so instead of useless char count
+    return `${langShort}: (comment-only code)`;
   }
 
   // IF node
@@ -153,7 +155,8 @@ export function generateNodeSummary(
         return `Switch: ${labels.join(", ")}${suffix}`;
       }
     }
-    return count > 0 ? `Switch with ${count} rules` : "Switch";
+    // Bug #2 fix: "Switch" with no context is meaningless — note the mode
+    return count > 0 ? `Switch with ${count} rules` : "Switch (no rules / expression mode)";
   }
 
   // AI Agent
@@ -189,6 +192,23 @@ export function generateNodeSummary(
 
   // Set node
   if (type === "set" || type.includes("set")) {
+    // Bug #4 fix: detect Set v2 (values.values[].name) before falling through to v3
+    const valuesWrapper = p.values as
+      | { values?: Array<{ name?: string }> }
+      | undefined;
+    if (valuesWrapper?.values) {
+      const fields = valuesWrapper.values
+        .map((v) => v.name)
+        .filter(Boolean)
+        .slice(0, 5);
+      if (fields.length > 0) {
+        const suffix =
+          valuesWrapper.values.length > 5
+            ? `, +${valuesWrapper.values.length - 5}`
+            : "";
+        return `Sets: ${fields.join(", ")}${suffix}`;
+      }
+    }
     // v3 Set: assignments.assignments[].name
     const assignments = p.assignments as
       | { assignments?: Array<{ name?: string }> }
@@ -488,26 +508,39 @@ export function extractExecutionRunData(
     const mainOutputs = outputData.main as unknown[][] | undefined;
     if (!Array.isArray(mainOutputs) || mainOutputs.length === 0) continue;
 
-    // Collect keys from all items on the first output
-    const items = mainOutputs[0];
-    if (!Array.isArray(items) || items.length === 0) continue;
+    // Extract keys and item counts for ALL output ports (IF/Switch have multiple)
+    const outputs: Array<NodeOutputData | null> = mainOutputs.map((items) => {
+      if (!Array.isArray(items) || items.length === 0) return null;
 
-    const allKeys = new Set<string>();
-    for (const item of items) {
-      const json = (item as Record<string, unknown>)?.json as
-        | Record<string, unknown>
-        | undefined;
-      if (json) {
-        for (const key of Object.keys(json)) {
-          allKeys.add(key);
+      const allKeys = new Set<string>();
+      for (const item of items) {
+        const json = (item as Record<string, unknown>)?.json as
+          | Record<string, unknown>
+          | undefined;
+        if (json) {
+          for (const key of Object.keys(json)) {
+            allKeys.add(key);
+          }
         }
       }
-    }
 
-    const keysArr = Array.from(allKeys);
+      const keysArr = Array.from(allKeys);
+      // Cap at 20 keys; append indicator so the AI knows fields were truncated
+      const truncated = keysArr.length > 20;
+      return {
+        keys: truncated
+          ? [...keysArr.slice(0, 20), `...+${keysArr.length - 20} more`]
+          : keysArr,
+        itemCount: items.length,
+      };
+    });
+
+    // outputKeys / itemCount = output port 0 for backward compatibility
+    const port0 = outputs[0];
     result[nodeName] = {
-      outputKeys: keysArr.length > 20 ? keysArr.slice(0, 20) : keysArr,
-      itemCount: items.length,
+      outputKeys: port0?.keys ?? [],
+      itemCount: port0?.itemCount ?? 0,
+      outputs,
     };
   }
 
@@ -516,22 +549,33 @@ export function extractExecutionRunData(
 
 /**
  * Find the input keys for a node by looking at upstream node outputs.
+ * Uses the connection's outputIndex to select the correct output port so that
+ * nodes downstream of an IF/Switch branch see only the fields from that branch,
+ * not from all outputs merged together.
  */
 export function getInputHintForNode(
   nodeName: string,
   flow: LiteConnection[],
   runDataMap: ExecutionRunDataMap
 ): string[] | undefined {
-  const upstreamNames = flow
-    .filter((c) => c.to === nodeName)
-    .map((c) => c.from);
+  const incomingConns = flow.filter((c) => c.to === nodeName);
 
-  if (upstreamNames.length === 0) return undefined;
+  if (incomingConns.length === 0) return undefined;
 
   const allKeys = new Set<string>();
-  for (const upstream of upstreamNames) {
-    const rd = runDataMap[upstream];
-    if (rd?.outputKeys) {
+  for (const conn of incomingConns) {
+    const rd = runDataMap[conn.from];
+    if (!rd) continue;
+
+    const outputIdx = conn.outputIndex ?? 0;
+
+    // Prefer per-output data when available (fixes Bug #5: only output[0] was used)
+    if (rd.outputs && rd.outputs[outputIdx]) {
+      for (const key of rd.outputs[outputIdx]!.keys) {
+        allKeys.add(key);
+      }
+    } else if (outputIdx === 0 && rd.outputKeys) {
+      // Fallback: backward-compat for entries without per-output data
       for (const key of rd.outputKeys) {
         allKeys.add(key);
       }

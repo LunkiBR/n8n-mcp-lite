@@ -408,6 +408,15 @@ export function reconstructWorkflow(
 
   // Reconstruct connections
   const connections: N8nConnections = {};
+
+  // Bug fix: auto-assign inputIndex for nodes with multiple upstream connections
+  // (Merge, etc.). Without this, every connection defaults to index 0 and the
+  // second branch of an IF→Merge pattern feeds the same input port, so Merge
+  // never receives both data streams and waitForAll never fires.
+  // Rule: if inputIndex is explicit → use it and reserve that slot.
+  //       if implicit → use the next available input port for that target.
+  const nextAutoInputIdx = new Map<string, number>();
+
   for (const conn of lite.flow) {
     const outputType = conn.type ?? "main";
     const outputIdx = conn.outputIndex ?? 0;
@@ -419,15 +428,30 @@ export function reconstructWorkflow(
       connections[conn.from][outputType] = [];
     }
 
-    // Ensure array has enough slots
+    // Ensure output array has enough slots
     while (connections[conn.from][outputType].length <= outputIdx) {
       connections[conn.from][outputType].push([]);
+    }
+
+    const trackerKey = `${conn.to}:${outputType}`;
+    let inputIdx: number;
+
+    if (conn.inputIndex !== undefined) {
+      // Explicit: respect it and advance tracker past this slot
+      inputIdx = conn.inputIndex;
+      if ((nextAutoInputIdx.get(trackerKey) ?? 0) <= inputIdx) {
+        nextAutoInputIdx.set(trackerKey, inputIdx + 1);
+      }
+    } else {
+      // Implicit: auto-assign next available input port for this target
+      inputIdx = nextAutoInputIdx.get(trackerKey) ?? 0;
+      nextAutoInputIdx.set(trackerKey, inputIdx + 1);
     }
 
     connections[conn.from][outputType][outputIdx].push({
       node: conn.to,
       type: outputType,
-      index: conn.inputIndex ?? 0,
+      index: inputIdx,
     });
   }
 

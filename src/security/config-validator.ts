@@ -190,29 +190,12 @@ export function validateNodeConfig(
     }
   }
 
-  // 7. Property location hints: detect misplaced params
-  if (nodeSchema.props) {
-    const topLevelNames = new Set(nodeSchema.props.map((p) => p.n));
-    const hasOptions = topLevelNames.has("options");
-
-    for (const paramKey of Object.keys(parameters)) {
-      if (topLevelNames.has(paramKey)) continue;
-      // Common params that are always valid at top level
-      if (["resource", "operation"].includes(paramKey)) continue;
-
-      // If the node has an "options" collection and this param isn't top-level,
-      // it likely belongs inside options
-      if (hasOptions) {
-        warnings.push({
-          type: "property_location_hint",
-          node: name,
-          property: paramKey,
-          message: `"${paramKey}" is not a top-level parameter for this node type. It may belong inside "options".`,
-          suggestion: `Move "${paramKey}" inside the "options" object: { options: { ${paramKey}: ... } }`,
-        });
-      }
-    }
-  }
+  // 7. Property location hints: DISABLED
+  // The compressed schema does not include all valid top-level params for every
+  // node type. Any valid param absent from the compressed schema would be flagged
+  // as misplaced, producing false positives on virtually every real workflow
+  // (e.g. HTTP Request's sendBody, sendHeaders, queryParameters; Code's mode; etc.).
+  // Re-enable only when the schema is extended to cover all valid top-level params.
 
   return { errors, warnings };
 }

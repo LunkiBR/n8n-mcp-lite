@@ -226,7 +226,6 @@ Every mutation (`create_workflow`, `update_workflow`, `update_nodes`) runs throu
 | **SQL injection patterns** | `'; DROP TABLE`, `UNION SELECT`, `-- comment` in HTTP bodies |
 | **Node config errors** | Unknown node types, invalid resource/operation combos, missing required fields |
 | **Type mismatches** | String where number expected, boolean where string expected |
-| **Property location hints** | Parameters placed at wrong nesting level (e.g., inside `options`) |
 | **Broken connections** | References to non-existent nodes |
 | **Orphan nodes** | Nodes with no connections in multi-node workflows |
 
@@ -483,6 +482,96 @@ src/
     gotchas.json        # Node quirks and best practices
     expressions.json    # n8n expression cookbook
 ```
+
+## Benchmark & Quality
+
+The project includes a comprehensive benchmark suite (`benchmark.mjs`) covering all major features. Run it after building:
+
+```bash
+npm run build && node benchmark.mjs
+```
+
+### Coverage (54 tests, 7 areas)
+
+#### 1. Smart Summaries
+
+| Case | Expected |
+|------|----------|
+| Code node skips `//`, `/*`, `*`, `import`, `require` | Returns first real line |
+| Code node with only comments | Returns `"JS: (comment-only code)"` — not a useless char count |
+| IF v2 (`conditions.conditions[0]`) | Extracts `leftValue / operator / rightValue` |
+| IF v2 with expression in `leftValue` | Shows the expression (e.g. `$json.attachmentType`) |
+| IF v1 (`value1`, `operation`, `value2`) | Correct fallback path |
+| Switch with 0 rules / expression mode | Returns `"Switch (no rules / expression mode)"` — not blank `"Switch"` |
+| AI Agent: reads `options.systemMessage` AND top-level `systemMessage` | Both work |
+| Set v2 (`values.values[].name`) | Detected before v3 fallback |
+| Set v3 (`assignments.assignments[].name`) | Correct |
+| All common summaries ≤ 100 chars | No overflow |
+
+#### 2. Ghost Payload
+
+| Case | Expected |
+|------|----------|
+| Keys extracted from `output[0]` | Correct |
+| **All outputs extracted** — IF/Switch with multiple branches | `outputs[]` array indexed by outputIndex |
+| `getInputHintForNode` uses correct `outputIndex` from connection | Nodes after IF False branch see only false-branch fields |
+| Cap of 20 keys adds `...+N more` indicator | AI knows fields were truncated |
+| `executionId` inexistent / null | Degrades gracefully, no crash |
+| Node that failed mid-execution | `error` captured, `outputKeys` is empty |
+| Trigger node (no upstream connections) | `inputHint` is `undefined` |
+| Multiple upstream nodes | Union of keys from all upstreams |
+| Node names with spaces | Lookup works correctly |
+| Output with 0 items | `null` entry in `outputs[]` |
+
+#### 3. Enhanced Validation
+
+| Case | Expected |
+|------|----------|
+| Numeric field receiving string | `type_mismatch` warning |
+| Field with `=` expression prefix | Never generates `type_mismatch` |
+| **Pass 7 disabled** — `sendBody`, `sendHeaders`, `queryParameters` at top level | No `property_location_hint` false positives |
+| `resource` / `operation` params | Never flagged |
+| Unknown / community node type | Advisory warning only, no blocking error |
+
+> **Note on Pass 7**: Property location hints are disabled. The compressed schema doesn't enumerate every valid top-level parameter, causing false positives on virtually every real workflow (e.g., HTTP Request's `sendBody`, `sendHeaders`, `queryParameters` are all valid top-level params but were flagged). Pass 7 will be re-enabled once the schema is extended.
+
+#### 4. Layout Algorithm
+
+| Case | Expected |
+|------|----------|
+| Linear chain A→B→C→D | X increases left to right |
+| IF/Switch branching | True and False branches have different Y positions |
+| Disconnected node | Assigned a valid position |
+| 100-node linear chain | Completes in < 2 seconds |
+| **Cycle protection** — A→B→A | Does not hang (max iterations guard) |
+
+#### 5. Merge Connections
+
+| Case | Expected |
+|------|----------|
+| 2 upstream nodes without explicit `inputIndex` | Auto-assigned ports 0 and 1 (no collision) |
+| Explicit `inputIndex` | Respected; auto-tracker advances past it |
+| IF→Merge pattern (False branch + audio path) | Both branches reach distinct input ports |
+| Linear chain | All connections remain at `index: 0` (no spurious increment) |
+
+#### 6. simplifyConnections Round-trip
+
+| Case | Expected |
+|------|----------|
+| `outputIndex > 0` | Preserved |
+| `inputIndex > 0` | Preserved |
+| `inputIndex = 0` | Stripped from compact format |
+
+#### 7. Regressions
+
+| Case | Expected |
+|------|----------|
+| `n8n-nodes-base.` prefix stripped/restored | Correct |
+| `langchain:` prefix stripped/restored | Correct |
+| Unknown node type humanized | No crash, no `undefined` |
+| `focus_workflow` without `executionId` | No change in behavior |
+| Partial execution data structure | No crash |
+| Empty runs array | Node skipped silently |
 
 ## License
 

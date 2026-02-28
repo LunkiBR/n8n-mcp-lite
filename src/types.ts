@@ -153,12 +153,20 @@ export interface N8nExecution {
   data?: unknown;
 }
 
+/** Output data for a single output port of a node */
+export interface NodeOutputData {
+  keys: string[];
+  itemCount: number;
+}
+
 /** Parsed execution run data for a single node */
 export interface NodeRunData {
-  /** Output data keys from the node's JSON output */
+  /** Output data keys from output port 0 (backward compat) */
   outputKeys: string[];
-  /** Number of items output */
+  /** Number of items on output port 0 */
   itemCount: number;
+  /** Per-output-port data. Index matches outputIndex in connections. */
+  outputs?: Array<NodeOutputData | null>;
   /** Error message if the node failed */
   error?: string;
 }

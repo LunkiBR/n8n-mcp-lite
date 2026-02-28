@@ -177,6 +177,33 @@ export class N8nApiClient {
     }
   }
 
+  /**
+   * Like triggerWebhook but returns both the HTTP status code and the body.
+   * Used by test_node to detect activation race conditions reliably.
+   */
+  async triggerWebhookWithStatus(
+    path: string,
+    method: string = "POST",
+    data?: unknown
+  ): Promise<{ status: number; body: unknown }> {
+    const url = new URL(`/webhook/${path}`, this.baseUrl);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout);
+
+    try {
+      const resp = await fetch(url.toString(), {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: data ? JSON.stringify(data) : undefined,
+        signal: controller.signal,
+      });
+      const body = await resp.json().catch(() => null);
+      return { status: resp.status, body };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async triggerWebhookTest(
     path: string,
     method: string = "POST",

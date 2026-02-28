@@ -1325,9 +1325,12 @@ export class ToolHandlers {
     }
 
     // Build temporary workflow: Webhook → Target Node
+    // Bug #13 fix: add a random suffix so concurrent calls at the same millisecond
+    // don't collide on workflow name or webhook path.
     const ts = Date.now();
-    const testWorkflowName = `__mcp_test_${ts}`;
-    const webhookPath = `mcp-test-${ts}`;
+    const rand = Math.random().toString(36).slice(2, 8);
+    const testWorkflowName = `__mcp_test_${ts}_${rand}`;
+    const webhookPath = `mcp-test-${ts}-${rand}`;
 
     const webhookId = crypto.randomUUID();
     const targetId = crypto.randomUUID();
@@ -1395,28 +1398,26 @@ export class ToolHandlers {
       // 3. Wait for activation to propagate, then trigger with retry
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
-      // 4. Trigger webhook with mock data (retry once on 404 — activation race)
-      let output: unknown;
-      const triggerAttempt = async () =>
-        this.api.triggerWebhook(webhookPath, "POST", mockInput);
+      // 4. Trigger webhook with mock data.
+      // Uses triggerWebhookWithStatus so the HTTP 404 (webhook not yet active)
+      // is detected from the actual HTTP status code — not from the JSON body,
+      // which is unreliable (n8n may return JSON or empty body on 404).
+      const triggerAttempt = () =>
+        this.api.triggerWebhookWithStatus(webhookPath, "POST", mockInput);
 
-      output = await triggerAttempt();
+      let result = await triggerAttempt();
 
-      // If we got a 404-style response, retry after extra wait
-      if (
-        output &&
-        typeof output === "object" &&
-        (output as Record<string, unknown>).status === 404
-      ) {
+      // If we got HTTP 404 (webhook not yet active), retry once after extra wait
+      if (result.status === 404) {
         await new Promise((resolve) => setTimeout(resolve, 2000));
-        output = await triggerAttempt();
+        result = await triggerAttempt();
       }
 
       const durationMs = Date.now() - startTime;
 
       return ok({
         success: true,
-        output,
+        output: result.body,
         durationMs,
         note: "Temporary test workflow was created and deleted automatically.",
       });

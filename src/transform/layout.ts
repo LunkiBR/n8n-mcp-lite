@@ -107,7 +107,14 @@ function assignLayers(
     queue.push([root.name, 0]);
   }
 
+  // Bug #16 fix: guard against infinite loops caused by cycles in the graph.
+  // Workflows should be DAGs, but corrupted data or update_nodes misuse can
+  // introduce A→B→A edges. Cap iterations at nodes²×2 as a hard safety limit.
+  let maxIterations = nodes.length * nodes.length * 2 + nodes.length + 1;
+
   while (queue.length > 0) {
+    if (--maxIterations < 0) break; // cycle detected — stop gracefully
+
     const [current, currentLayer] = queue.shift()!;
     const neighbors = forward.get(current) ?? [];
 
