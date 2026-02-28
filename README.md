@@ -4,23 +4,6 @@ Token-optimized Model Context Protocol for n8n.
 
 Reduce AI token usage by up to **97–98%** in large workflows.
 
-Build scalable, context-aware AI automations without exploding costs or losing reliability.
-
----
-
-## 🚨 The Problem
-
-Standard MCP implementations broadcast the entire workflow graph to the model.
-
-As workflows grow:
-- Context grows exponentially
-- Tokens explode
-- Latency increases
-- Reliability drops
-- Costs become unpredictable
-
-AI automation stops scaling.
-
 ---
 
 ## 📊 Real Benchmark Results
@@ -33,113 +16,140 @@ Measured using identical workflows.
 | 78-node workflow | ~600,000+ tokens | ~16,500 tokens |
 | Focus on 2 nodes (from 38) | ~135,000 tokens | ~2,600 tokens |
 
-### 🔥 Reduction
+### Reduction
 
-- Small workflow → **~87% reduction**
-- Large workflow → **~97% reduction**
-- Focused execution → **~98% reduction**
+- Small workflow → ~87% reduction  
+- Large workflow → ~97% reduction  
+- Focused execution → ~98% reduction  
 
-n8n-mcp-lite scales.  
-Naive MCP does not.
-
----
-
-## 🟢 Quick Start (Beginner Path)
-
-You don’t need to understand MCP internals.
-
-1. Install
-2. Connect your model (Claude, Gemini, etc.)
-3. Import `/examples/beginner`
-4. Run
-
-You now have:
-- Controlled context
-- Predictable token usage
-- Stable AI responses
-- Scalable workflow behavior
+This is not a micro-optimization.  
+It is an architectural correction.
 
 ---
 
-## 🔵 Architecture (For Developers)
+# 🚀 Installation
 
-### Standard MCP
+Choose your environment:
+
+---
+
+## 🟢 Cursor
+
+1. Open Cursor.
+2. Go to Settings → MCP.
+3. Add a new MCP server.
+4. Point to this repository.
+5. Restart Cursor.
+
+You're ready to build token-efficient workflows.
+
+---
+
+## 🟢 Claude Desktop
+
+1. Open Claude Desktop.
+2. Configure MCP server path.
+3. Add n8n-mcp-lite as your MCP provider.
+4. Restart Claude.
+
+Now Claude will operate with focused context instead of full-graph broadcasting.
+
+---
+
+## 🟢 Generic MCP-Compatible Clients
+
+If your client supports custom MCP servers:
+
+1. Clone this repository.
+2. Run the MCP server locally.
+3. Register it in your client config.
+4. Start building.
+
+---
+
+# 🟢 Quick Start (Beginner Friendly)
+
+1. Import `/examples/beginner`.
+2. Run a scan.
+3. Focus on selected nodes.
+4. Observe token difference.
+
+No deep MCP knowledge required.
+
+---
+
+# 🔵 Architecture Overview (For Developers)
+
+## The Problem with Standard MCP
+
+Traditional implementations:
 
 Workflow → Full Graph → Model → Token Explosion
 
-### n8n-mcp-lite
+As workflows grow:
+- Context scales linearly
+- Tokens scale exponentially
+- Reliability degrades
+
+## n8n-mcp-lite Strategy
 
 Workflow → Context Filter → Focus Engine → Model → Stable Output
 
-Instead of sending everything:
+Instead of broadcasting everything:
 
-- Nodes are segmented
-- Only relevant context is transmitted
-- Structured minimal payloads are generated
-- Execution semantics are preserved
+- Segment workflow intelligently
+- Filter irrelevant nodes
+- Send minimal structured payload
+- Preserve execution semantics
 
 ---
 
-## 🧠 Design Principles
+# 🧠 Design Principles
 
 - Focus over breadth
 - Minimal context, maximal signal
 - Deterministic structure
 - Model-agnostic
-- Production-first architecture
+- Production-ready behavior
 
 ---
 
-## 📁 Repository Structure
-/core
-mcp-lite-engine
+# 📁 Repository Structure
 
-/examples
-beginner
-production
-enterprise-pattern
-
-/docs
-architecture.md
-token-strategy.md
-scaling.md
----
-
-## 🧪 Why This Matters
-
-At 600,000+ tokens per call, large workflows become:
-
-- Expensive
-- Slow
-- Unreliable
-
-At 16,500 tokens:
-
-- Practical
-- Predictable
-- Production-viable
-
-This is not an optimization tweak.  
-It is an architectural correction.
+/core  
+/examples  
+/docs  
 
 ---
 
-## 🤝 Contributing
+# 🧪 When Should You Use This?
+
+Use n8n-mcp-lite if:
+
+- Workflows exceed 20+ nodes
+- You hit context window limits
+- Token costs are rising
+- AI responses become unstable
+- You care about scalable automation design
+
+---
+
+# 🤝 Contributing
 
 Contributions welcome.
 
-- Benchmark improvements
-- Additional model support
-- Workflow patterns
-- Testing scenarios
+See CONTRIBUTING.md for:
 
-See `CONTRIBUTING.md`.
+- Setup instructions
+- Benchmark methodology
+- Testing strategy
+- Good first issues
 
 ---
 
-## 🌍 Vision
+# 🌍 Vision
 
-n8n-mcp-lite aims to become the standard way of building token-efficient AI workflows in n8n.
+n8n-mcp-lite aims to become the standard approach for building context-aware AI workflows in n8n.
 
 Start lightweight.  
 Scale safely.  
@@ -147,6 +157,6 @@ Design intentionally.
 
 ---
 
-## ⭐ If This Project Helps
+# ⭐ Support
 
-Give it a star and help improve AI automation standards.
+If this project improves your workflow reliability or reduces token usage, consider giving it a star.
