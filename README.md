@@ -1,6 +1,6 @@
 # n8n-mcp-lite
 
-Token-optimized MCP Server for n8n workflows. **80%+ token reduction** compared to the standard n8n MCP server, plus **Focus Mode**, **Security Preflight**, **Auto-Versioning**, and a built-in **Node Knowledge DB** (1,236 nodes).
+Token-optimized MCP Server for n8n workflows. **80%+ token reduction** compared to the standard n8n MCP server, plus **Focus Mode**, **Security Preflight**, **Auto-Versioning**, a built-in **Node Knowledge DB** (1,236 nodes), **Ghost Payload hints**, and **Smart Summaries**.
 
 ## The Problem
 
@@ -23,6 +23,9 @@ Even with the simplified format, large workflows with AI Agents (huge system pro
 3. **Security Preflight** — Validates every mutation before it reaches the n8n API
 4. **Auto-Versioning** — Automatic snapshots before every write operation, with rollback
 5. **Node Knowledge DB** — 1,236 node schemas for inline validation and suggestions
+6. **Smart Summaries** — `scan_workflow` shows meaningful previews: IF conditions, Switch labels, AI prompts, Code snippets, Set field names
+7. **Ghost Payload** — `focus_workflow` with an `executionId` injects `inputHint` showing which `$json` fields are available at each focused node
+8. **Node Dry-Run** — `test_node` runs a single node with mock data via a temporary workflow, without touching production
 
 | Feature | n8n-mcp (standard) | n8n-mcp-lite |
 |---------|---------------------|--------------|
@@ -36,6 +39,8 @@ Even with the simplified format, large workflows with AI Agents (huge system pro
 | Security validation | None | Pre-flight on every mutation |
 | Rollback | None | Auto-snapshots + `rollback_workflow` |
 | Node schema lookup | None | 1,236 nodes built-in |
+| Input field hints | None | Ghost Payload via `executionId` |
+| Node testing | None | `test_node` with mock data |
 
 ## Quick Start
 
@@ -140,7 +145,7 @@ Add to your project's `.claude/settings.json` or global `~/.claude/settings.json
 
 ### 3. Add the System Prompt (recommended)
 
-For best results, add the contents of [`SYSTEM_PROMPT.md`](./SYSTEM_PROMPT.md) to your AI client's system prompt or custom instructions. This teaches the AI how to use Focus Mode, Security Preflight, and versioning effectively.
+For best results, add the contents of [`SYSTEM_PROMPT.md`](./SYSTEM_PROMPT.md) to your AI client's system prompt or custom instructions. This teaches the AI how to use Focus Mode, Security Preflight, Ghost Payload, and all 26 tools effectively.
 
 ### Environment Variables
 
@@ -153,7 +158,7 @@ For best results, add the contents of [`SYSTEM_PROMPT.md`](./SYSTEM_PROMPT.md) t
 
 > `N8N_API_URL` is also accepted as an alias for `N8N_HOST`.
 
-## Tools (19 total)
+## Tools (26 total)
 
 ### Reading
 
@@ -162,8 +167,8 @@ For best results, add the contents of [`SYSTEM_PROMPT.md`](./SYSTEM_PROMPT.md) t
 | `list_workflows` | List all workflows (id, name, active, tags, node count) |
 | `get_workflow` | Full simplified workflow (all nodes with params, 80%+ fewer tokens) |
 | `get_workflow_raw` | Raw n8n JSON (debugging only) |
-| `scan_workflow` | **Focus Mode** — Lightweight scan: names, types, 1-line summaries, segments, token estimate |
-| `focus_workflow` | **Focus Mode** — Full detail for selected nodes only, dormant summaries for the rest |
+| `scan_workflow` | **Focus Mode** — Lightweight scan: names, types, smart 1-line summaries, segments, token estimate |
+| `focus_workflow` | **Focus Mode** — Full detail for selected nodes only, dormant summaries for the rest. Accepts optional `executionId` for **Ghost Payload** hints |
 | `expand_focus` | **Focus Mode** — Grow focus area by adding upstream/downstream/specific nodes |
 
 ### Writing (with Security Preflight + Auto-Snapshot)
@@ -184,8 +189,9 @@ All write operations automatically run **Security Preflight** before sending to 
 | `activate_workflow` | Enable automatic triggers |
 | `deactivate_workflow` | Disable automatic triggers |
 | `list_executions` | List executions (filter by workflow, status) |
-| `get_execution` | Get execution details |
+| `get_execution` | Get execution details (use `includeData: true` to retrieve node output data) |
 | `trigger_webhook` | Trigger via webhook (production or test) |
+| `test_node` | **Dry-Run** — Test a single node with mock input data without touching your production workflow |
 
 ### Versioning
 
@@ -193,6 +199,19 @@ All write operations automatically run **Security Preflight** before sending to 
 |------|-------------|
 | `list_versions` | List all snapshots for a workflow (auto-created before every mutation) |
 | `rollback_workflow` | Restore a workflow to a previous snapshot |
+
+### Node Knowledge Base
+
+| Tool | Description |
+|------|-------------|
+| `search_nodes` | Search 1,236 built-in n8n node schemas by keyword |
+| `get_node` | Get full schema for a node type (properties, operations, credentials) |
+| `search_patterns` | Search ready-made workflow recipe templates |
+| `get_pattern` | Get a complete workflow recipe (nodes + flow ready to use) |
+| `get_payload_schema` | Get webhook payload schema + n8n expressions for WhatsApp, Telegram, etc. |
+| `get_n8n_knowledge` | Look up gotchas, quirks, and best practices for specific nodes |
+| `search_expressions` | Search cookbook of ready-made n8n expressions (cross-branch access, date formatting, etc.) |
+| `list_providers` | List all webhook/API providers with documented payload schemas |
 
 ## Security Preflight
 
@@ -202,10 +221,12 @@ Every mutation (`create_workflow`, `update_workflow`, `update_nodes`) runs throu
 
 | Check | Examples |
 |-------|---------|
-| **Expression validation** | Missing `=` prefix, mismatched `{{ }}`, empty expressions |
+| **Expression validation** | Missing `=` prefix, mismatched `{{ }}`, empty expressions, bare `$json`, legacy `$node[]` |
 | **Hardcoded credentials** | OpenAI API keys, AWS keys, Slack tokens, DB connection strings |
 | **SQL injection patterns** | `'; DROP TABLE`, `UNION SELECT`, `-- comment` in HTTP bodies |
 | **Node config errors** | Unknown node types, invalid resource/operation combos, missing required fields |
+| **Type mismatches** | String where number expected, boolean where string expected |
+| **Property location hints** | Parameters placed at wrong nesting level (e.g., inside `options`) |
 | **Broken connections** | References to non-existent nodes |
 | **Orphan nodes** | Nodes with no connections in multi-node workflows |
 
@@ -249,10 +270,12 @@ Focus Mode is designed for large workflows (30+ nodes) where loading everything 
 
 ```
 scan_workflow     →  See the full structure (~2K-5K tokens, no params)
+                     Smart summaries: IF conditions, Switch labels, AI prompts, Code snippets
                      Detects branches, estimates total token cost
                      ↓
 focus_workflow    →  Zoom into specific area (full detail inside, dormant outside)
                      3 modes: explicit nodes, branch, or range
+                     Optional: executionId → Ghost Payload hints on focused nodes
                      ↓
 update_nodes      →  Edit within the focus boundary
                      ↓
@@ -279,12 +302,95 @@ focus_workflow({ "id": "workflow-id", "branch": { "node": "Router", "outputIndex
 focus_workflow({ "id": "workflow-id", "range": { "from": "Validate Input", "to": "Send Response" } })
 ```
 
+### Ghost Payload — Know your `$json` fields
+
+When you have an execution ID, pass it to `focus_workflow` and each focused node will receive an `inputHint` array listing the `$json` fields available from its upstream node's last run:
+
+```json
+focus_workflow({
+  "id": "workflow-id",
+  "nodes": ["AI Agent", "Format Response"],
+  "executionId": "1234"
+})
+```
+
+The focused nodes will include:
+```json
+{
+  "name": "AI Agent",
+  "inputHint": ["customerId", "message", "channel", "timestamp"]
+}
+```
+
+No more guessing which fields are available — the execution data tells you exactly what arrives at each node.
+
 ### Real-World Results
 
 | Workflow | Nodes | get_workflow | scan_workflow | focus (2 nodes) |
 |----------|-------|-------------|---------------|-----------------|
 | CRIS Phase 2+3 | 38 | ~13,600 tok | ~2,800 tok (80% less) | ~2,600 tok (81% less) |
 | Limpex Atendimento | 78 | ~16,500 tok | ~5,100 tok (69% less) | ~3,100 tok (81% less) |
+
+## Node Dry-Run (`test_node`)
+
+Test a single node with mock input data without modifying or running your production workflow:
+
+```json
+test_node({
+  "node": {
+    "name": "Transform",
+    "type": "code",
+    "_v": 2,
+    "params": {
+      "jsCode": "return items.map(i => ({ json: { doubled: i.json.x * 2 } }))"
+    }
+  },
+  "mockInput": { "x": 5 }
+})
+```
+
+Returns the node's actual output: `{ "doubled": 10 }`
+
+**How it works**: Creates a temporary 2-node workflow (`Webhook → YourNode`) with `responseMode: "lastNode"`, activates it, sends the mock data, captures the node's output from the webhook response, then permanently deletes the temporary workflow.
+
+**Limitations**:
+- Trigger nodes (webhook, schedule, chat) cannot be tested this way
+- Nodes requiring credentials need those credentials configured in your n8n instance
+- If the MCP server crashes mid-test, a `__mcp_test_*` workflow may remain — delete it manually
+
+## Node Knowledge Base
+
+The built-in Knowledge Base includes 8 tools for working with n8n nodes without leaving the chat:
+
+```
+# Find the right node type
+search_nodes("send email")
+→ gmail, emailSend, sendGrid, mailchimp...
+
+# Get full schema before configuring
+get_node("httpRequest")
+→ Properties, operations, credential types, version info
+
+# Find ready-made patterns
+search_patterns("whatsapp ai agent")
+→ Pattern: whatsapp-evolution-ai-agent (webhook + agent + memory)
+
+# Get a complete template
+get_pattern("whatsapp-evolution-ai-agent")
+→ nodes[] + flow[] ready to pass to create_workflow
+
+# Know what fields to extract from a webhook
+get_payload_schema("evolution-api")
+→ JSON structure + n8n expressions for each field
+
+# Avoid common mistakes
+get_n8n_knowledge("switch fallthrough")
+→ Known issue: Switch node doesn't fall through; use separate connections
+
+# Find expression recipes
+search_expressions("cross branch reference")
+→ $('NodeName').item.json.field — access data from non-linear upstream
+```
 
 ## Simplified Format
 
@@ -311,7 +417,8 @@ Prefixes are automatically stripped/restored:
   "creds": { "gmailOAuth2Api": "My Gmail" },
   "disabled": true,
   "onError": "continueRegularOutput",
-  "notes": "Sends notification"
+  "notes": "Sends notification",
+  "inputHint": ["email", "name", "orderId"]
 }
 ```
 
@@ -353,22 +460,28 @@ src/
   types.ts              # All type definitions
   transform/
     simplify.ts         # Raw JSON → Simplified format (bidirectional)
+    layout.ts           # Auto-position algorithm for new nodes
     graph.ts            # BFS, adjacency, classification algorithms
-    focus.ts            # Scan, Focus, Dormant builders
+    focus.ts            # Scan, Focus, Dormant builders + Ghost Payload extraction
   tools/
-    definitions.ts      # 19 MCP tool schemas
+    definitions.ts      # 26 MCP tool schemas
     handlers.ts         # Tool handler implementations
   security/
     preflight.ts        # Security orchestrator
-    expression-validator.ts  # n8n expression syntax checks
-    config-validator.ts      # Node config vs knowledge DB
+    expression-validator.ts  # n8n expression syntax checks (incl. Rule 6: bare $json)
+    config-validator.ts      # Node config vs knowledge DB (type + location validation)
     security-analyzer.ts     # Credential/SQL/orphan detection
   versioning/
     version-store.ts    # File-based snapshot storage
   knowledge/
     node-db.ts          # 1,236 node schema database
+    pattern-db.ts       # Workflow patterns, payloads, gotchas, expressions
   data/
     nodes.json          # Compiled node knowledge (3.1MB)
+    patterns.json       # Workflow recipe templates
+    payloads.json       # Webhook payload schemas (WhatsApp, Telegram, etc.)
+    gotchas.json        # Node quirks and best practices
+    expressions.json    # n8n expression cookbook
 ```
 
 ## License

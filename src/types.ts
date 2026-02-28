@@ -95,6 +95,8 @@ export interface LiteNode {
   _id: string;
   /** Type version - only if != 1 */
   _v?: number;
+  /** Input data keys from last execution (injected by focus_workflow with executionId) */
+  inputHint?: string[];
 }
 
 /** Simplified connection: "source -> target" with optional metadata */
@@ -150,6 +152,19 @@ export interface N8nExecution {
   workflowId: string;
   data?: unknown;
 }
+
+/** Parsed execution run data for a single node */
+export interface NodeRunData {
+  /** Output data keys from the node's JSON output */
+  outputKeys: string[];
+  /** Number of items output */
+  itemCount: number;
+  /** Error message if the node failed */
+  error?: string;
+}
+
+/** Map of node name -> run data extracted from execution */
+export type ExecutionRunDataMap = Record<string, NodeRunData>;
 
 export interface ExecutionListItem {
   id: string;
@@ -217,6 +232,8 @@ export interface DormantNode {
   outputsTo?: string[];
   /** For downstream nodes: which focused nodes feed them */
   inputsFrom?: string[];
+  /** Hint about what data this node outputs (for upstream context) */
+  outputHint?: string;
 }
 
 /** A boundary crossing into or out of the focus area */

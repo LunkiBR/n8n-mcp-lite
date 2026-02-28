@@ -76,7 +76,7 @@ export const TOOLS: Tool[] = [
   {
     name: "create_workflow",
     description:
-      'Create a new workflow from simplified format. Send nodes (name, type, params) and flow connections. Positions are auto-generated. Types can omit "n8n-nodes-base." prefix. Returns new workflow ID.',
+      'Create a new workflow from simplified format. Send nodes (name, type, params) and flow connections. Positions are auto-generated. Types can omit "n8n-nodes-base." prefix. Returns new workflow ID.\n\nBEST PRACTICE: Before creating complex workflows, use search_patterns to find ready-made templates. Use get_payload_schema for webhook integrations. Use get_n8n_knowledge for node-specific gotchas.\n\nAI SUB-NODE WIRING: For LangChain AI nodes, use the type field in flow connections:\n- LLM → AI Agent: {"from": "OpenAI", "to": "AI Agent", "type": "ai_languageModel"}\n- Memory → AI Agent: {"from": "Memory", "to": "AI Agent", "type": "ai_memory"}\n- Tool → AI Agent: {"from": "Tool", "to": "AI Agent", "type": "ai_tool"}\n- Embedding → VectorStore: {"from": "Embed", "to": "Store", "type": "ai_embedding"}\n- Document → VectorStore: {"from": "Loader", "to": "Store", "type": "ai_document"}\n\nREQUIREMENT GATHERING: Always ask the user for required configuration BEFORE creating (API URLs, credentials, system prompts, etc.).',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -170,7 +170,7 @@ export const TOOLS: Tool[] = [
   {
     name: "update_nodes",
     description:
-      'Surgically update specific nodes or connections without sending the entire workflow. Operations: addNode, removeNode, updateNode, addConnection, removeConnection, enable, disable. Very token-efficient for small changes.',
+      'Surgically update specific nodes or connections without sending the entire workflow. Operations: addNode, removeNode, updateNode, addConnection, removeConnection, enable, disable. Very token-efficient for small changes.\n\nFor AI sub-node connections use type in addConnection: {"op":"addConnection","from":"OpenAI","to":"AI Agent","type":"ai_languageModel"}',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -290,13 +290,19 @@ export const TOOLS: Tool[] = [
 
   {
     name: "get_execution",
-    description: "Get details of a specific workflow execution.",
+    description:
+      "Get details of a specific workflow execution. Use includeData to get the node-level output data (which fields each node produced).",
     inputSchema: {
       type: "object" as const,
       properties: {
         id: {
           type: "string",
           description: "Execution ID",
+        },
+        includeData: {
+          type: "boolean",
+          description:
+            "Include node output data from the execution (default: false). Returns a map of nodeName → { outputKeys, itemCount }.",
         },
       },
       required: ["id"],
@@ -410,6 +416,11 @@ export const TOOLS: Tool[] = [
             },
           },
           required: ["from", "to"],
+        },
+        executionId: {
+          type: "string",
+          description:
+            "Optional execution ID. When provided, injects inputHint on focused nodes showing which $json.xxx fields are available from the last execution's upstream node data.",
         },
       },
       required: ["id"],
@@ -545,6 +556,151 @@ export const TOOLS: Tool[] = [
         },
       },
       required: ["nodeType"],
+    },
+  },
+
+  // ---- Knowledge: Search Patterns ----
+  {
+    name: "search_patterns",
+    description:
+      'Search ready-made workflow recipe templates by keyword. Returns matching patterns with id, name, description, tags, complexity, and requiredParams. Use BEFORE create_workflow to find existing templates. Query with keywords like "whatsapp", "ai agent", "webhook", "evolution", "meta".',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: 'Search keywords (e.g. "whatsapp evolution ai", "webhook router", "menu bot")',
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: 'Filter by tags (e.g. ["whatsapp", "ai-agent"])',
+        },
+      },
+      required: ["query"],
+    },
+  },
+
+  // ---- Knowledge: Get Pattern ----
+  {
+    name: "get_pattern",
+    description:
+      'Get a complete workflow recipe template by ID. Returns full nodes[] and flow[] ready to use with create_workflow. Also returns requiredParams listing what to ask the user before creating. Use search_patterns first to find the pattern ID.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: 'Pattern ID from search_patterns (e.g. "whatsapp-evolution-ai-agent")',
+        },
+      },
+      required: ["id"],
+    },
+  },
+
+  // ---- Knowledge: Get Payload Schema ----
+  {
+    name: "get_payload_schema",
+    description:
+      'Get webhook payload schema + extraction expressions for a specific provider. Returns the incoming JSON structure, ready-to-use n8n expressions for each field, and send message formats. Use when building integrations with WhatsApp, Telegram, or other webhook-based services.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        provider: {
+          type: "string",
+          description: 'Provider ID. Use list_providers to see available options. Examples: "evolution-api", "whatsapp-meta-cloud", "z-api", "telegram"',
+        },
+        event: {
+          type: "string",
+          description: 'Optional: specific event name to focus on (e.g. "messages.upsert", "messages")',
+        },
+      },
+      required: ["provider"],
+    },
+  },
+
+  // ---- Knowledge: Get n8n Knowledge ----
+  {
+    name: "get_n8n_knowledge",
+    description:
+      'Look up gotchas, quirks, and best practices for n8n nodes and patterns. Returns documented issues with solutions and example code. Use when you\'re unsure about node behavior, connection types, or common pitfalls. Query by keyword or node type.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: 'What you want to know (e.g. "switch fallthrough", "ai agent output", "meta webhook verification", "session memory")',
+        },
+        nodeType: {
+          type: "string",
+          description: 'Optional: filter by node type (e.g. "switch", "ai-agent", "postgres", "httpRequest")',
+        },
+      },
+    },
+  },
+
+  // ---- Knowledge: List Providers ----
+  {
+    name: "list_providers",
+    description:
+      'List all webhook/API providers that have documented payload schemas. Returns provider IDs to use with get_payload_schema.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+
+  // ---- Knowledge: Search Expressions ----
+  {
+    name: "search_expressions",
+    description:
+      'Search the n8n expression cookbook for ready-made expressions. Returns expressions for common use cases: cross-branch data access, WhatsApp field extraction, date formatting, null handling, etc.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: 'What you need (e.g. "extract whatsapp phone", "cross branch reference", "null default", "date format")',
+        },
+        category: {
+          type: "string",
+          description: 'Optional: filter by category ID (e.g. "cross-branch", "whatsapp-specific", "ai-agent-specific", "null-handling")',
+        },
+      },
+    },
+  },
+  // ---- Dry-Run: Test Node ----
+  {
+    name: "test_node",
+    description:
+      'Test a single node with mock input data without running the full workflow. Creates a temporary Webhook\u2192Node workflow, triggers it, captures output, and cleans up automatically. LIMITATIONS: (1) Cannot test trigger nodes (webhook, schedule, cron). (2) Nodes requiring credentials must have valid credentials configured in n8n. (3) The node receives mock data via webhook, not from a real upstream node.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        node: {
+          type: "object",
+          description:
+            "The node to test. Same format as create_workflow nodes: {name, type, params?, creds?, _v?}",
+          properties: {
+            name: { type: "string", description: "Node name" },
+            type: { type: "string", description: "Node type (e.g. 'code', 'set', 'httpRequest')" },
+            params: { type: "object", description: "Node parameters" },
+            creds: { type: "object", description: "Credential names" },
+            _v: { type: "number", description: "Type version" },
+          },
+          required: ["name", "type"],
+        },
+        mockInput: {
+          type: "object",
+          description:
+            "Mock input data to feed into the node. Simulates the $json fields the node receives from upstream.",
+        },
+        timeout: {
+          type: "number",
+          description: "Timeout in milliseconds (default: 15000, max: 60000)",
+        },
+      },
+      required: ["node", "mockInput"],
     },
   },
 ];

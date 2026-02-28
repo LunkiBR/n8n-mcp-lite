@@ -20,6 +20,11 @@ export class N8nApiClient {
     this.timeout = config.timeout ?? 30000;
   }
 
+  /** Get the base URL (for constructing webhook URLs externally) */
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
   private async request<T>(
     path: string,
     options: {
@@ -135,8 +140,13 @@ export class N8nApiClient {
     return this.request("/executions", { params: qp });
   }
 
-  async getExecution(id: string): Promise<N8nExecution> {
-    return this.request<N8nExecution>(`/executions/${id}`);
+  async getExecution(
+    id: string,
+    includeData = false
+  ): Promise<N8nExecution> {
+    const params: Record<string, string> = {};
+    if (includeData) params.includeData = "true";
+    return this.request<N8nExecution>(`/executions/${id}`, { params });
   }
 
   async deleteExecution(id: string): Promise<void> {

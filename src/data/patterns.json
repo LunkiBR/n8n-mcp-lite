@@ -1,0 +1,943 @@
+[
+  {
+    "id": "whatsapp-evolution-ai-agent",
+    "name": "WhatsApp Bot - Evolution API + AI Agent",
+    "description": "Bot completo de atendimento via Evolution API com AI Agent, memória de sessão por número e envio de resposta automático. Filtra mensagens próprias e de grupos.",
+    "tags": ["whatsapp", "evolution-api", "ai-agent", "customer-service", "memory"],
+    "complexity": "advanced",
+    "estimatedNodes": 8,
+    "requiredParams": [
+      {"key": "EVOLUTION_API_URL", "description": "URL base da Evolution API (ex: https://evolution.seudominio.com)", "envVar": true},
+      {"key": "EVOLUTION_API_KEY", "description": "API Key da instância ou global", "envVar": true},
+      {"key": "EVOLUTION_INSTANCE", "description": "Nome da instância WhatsApp na Evolution API", "envVar": true},
+      {"key": "webhookPath", "description": "Caminho do webhook (ex: whatsapp-evolution)", "default": "whatsapp-evolution"},
+      {"key": "openaiModel", "description": "Modelo OpenAI a usar", "options": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"], "default": "gpt-4o-mini"},
+      {"key": "systemPrompt", "description": "Prompt do sistema: persona do agente, regras de atendimento, conhecimento base"},
+      {"key": "memoryWindowLength", "description": "Quantas mensagens manter no histórico da sessão", "default": 10}
+    ],
+    "nodes": [
+      {
+        "name": "WhatsApp Webhook",
+        "type": "webhook",
+        "_v": 2,
+        "_id": "node-webhook-001",
+        "params": {
+          "httpMethod": "POST",
+          "path": "whatsapp-evolution",
+          "responseMode": "responseNode"
+        }
+      },
+      {
+        "name": "Acknowledge Receipt",
+        "type": "respondToWebhook",
+        "_id": "node-respond-001",
+        "params": {
+          "respondWith": "json",
+          "responseBody": "{\"status\": \"received\"}"
+        }
+      },
+      {
+        "name": "Filter Valid Messages",
+        "type": "if",
+        "_v": 2,
+        "_id": "node-filter-001",
+        "params": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {
+                "id": "cond-1",
+                "leftValue": "={{ $json.event }}",
+                "rightValue": "messages.upsert",
+                "operator": {"type": "string", "operation": "equals"}
+              },
+              {
+                "id": "cond-2",
+                "leftValue": "={{ $json.data.key.fromMe }}",
+                "rightValue": false,
+                "operator": {"type": "boolean", "operation": "equals"}
+              },
+              {
+                "id": "cond-3",
+                "leftValue": "={{ $json.data.key.remoteJid }}",
+                "rightValue": "@g.us",
+                "operator": {"type": "string", "operation": "notContains"}
+              }
+            ],
+            "combinator": "and"
+          }
+        }
+      },
+      {
+        "name": "Extract Message",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-set-001",
+        "params": {
+          "mode": "manual",
+          "duplicateItem": false,
+          "assignments": {
+            "assignments": [
+              {
+                "id": "1",
+                "name": "senderPhone",
+                "value": "={{ $json.data.key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '') }}",
+                "type": "string"
+              },
+              {
+                "id": "2",
+                "name": "messageText",
+                "value": "={{ $json.data.message.conversation ?? $json.data.message.extendedTextMessage?.text ?? $json.data.message.imageMessage?.caption ?? '' }}",
+                "type": "string"
+              },
+              {
+                "id": "3",
+                "name": "senderName",
+                "value": "={{ $json.data.pushName ?? 'Usuário' }}",
+                "type": "string"
+              },
+              {
+                "id": "4",
+                "name": "messageId",
+                "value": "={{ $json.data.key.id }}",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "OpenAI Chat Model",
+        "type": "langchain:lmChatOpenAi",
+        "_v": 1,
+        "_id": "node-llm-001",
+        "creds": {"openAiApi": "OpenAI API"},
+        "params": {
+          "model": {
+            "__rl": true,
+            "value": "gpt-4o-mini",
+            "mode": "list"
+          }
+        }
+      },
+      {
+        "name": "Session Memory",
+        "type": "langchain:memoryBufferWindow",
+        "_v": 1,
+        "_id": "node-memory-001",
+        "params": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $('Extract Message').first().json.senderPhone }}",
+          "contextWindowLength": 10
+        }
+      },
+      {
+        "name": "AI Agent",
+        "type": "langchain:agent",
+        "_v": 1,
+        "_id": "node-agent-001",
+        "params": {
+          "promptType": "define",
+          "text": "={{ $('Extract Message').first().json.messageText }}",
+          "options": {
+            "systemMessage": "Você é um assistente de atendimento ao cliente prestativo e amigável. Responda sempre em português. Seja conciso e direto. Se não souber algo, diga que vai verificar."
+          }
+        }
+      },
+      {
+        "name": "Send WhatsApp Reply",
+        "type": "httpRequest",
+        "_v": 4,
+        "_id": "node-http-001",
+        "params": {
+          "method": "POST",
+          "url": "={{ $env.EVOLUTION_API_URL }}/message/sendText/={{ $env.EVOLUTION_INSTANCE }}",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {"name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}"},
+              {"name": "Content-Type", "value": "application/json"}
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={ \"number\": \"{{ $('Extract Message').first().json.senderPhone }}\", \"text\": \"{{ $('AI Agent').first().json.output.replace(/\"/g, '\\\\\"') }}\" }"
+        }
+      }
+    ],
+    "flow": [
+      {"from": "WhatsApp Webhook", "to": "Acknowledge Receipt"},
+      {"from": "WhatsApp Webhook", "to": "Filter Valid Messages"},
+      {"from": "Filter Valid Messages", "to": "Extract Message"},
+      {"from": "Extract Message", "to": "AI Agent"},
+      {"from": "OpenAI Chat Model", "to": "AI Agent", "type": "ai_languageModel"},
+      {"from": "Session Memory", "to": "AI Agent", "type": "ai_memory"},
+      {"from": "AI Agent", "to": "Send WhatsApp Reply"}
+    ],
+    "notes": "SETUP: 1) Configure env vars EVOLUTION_API_URL, EVOLUTION_API_KEY, EVOLUTION_INSTANCE. 2) Configure webhook na Evolution API apontando para a URL deste webhook. 3) Adicione sua credencial OpenAI. 4) Customize o systemMessage no AI Agent."
+  },
+
+  {
+    "id": "whatsapp-meta-verifier",
+    "name": "WhatsApp Meta Cloud - Webhook com Verificação",
+    "description": "Template completo para receber webhooks da Meta WhatsApp Business API. Inclui verificação GET (hub.challenge) e processamento de mensagens POST.",
+    "tags": ["whatsapp", "meta-cloud", "webhook", "verification", "setup"],
+    "complexity": "intermediate",
+    "estimatedNodes": 6,
+    "requiredParams": [
+      {"key": "META_VERIFY_TOKEN", "description": "Token de verificação que você define e configura no painel da Meta", "envVar": true},
+      {"key": "META_ACCESS_TOKEN", "description": "Token de acesso permanente (System User Token)", "envVar": true},
+      {"key": "META_PHONE_NUMBER_ID", "description": "ID do número de telefone na Meta", "envVar": true},
+      {"key": "webhookPath", "description": "Caminho do webhook (ex: whatsapp-meta)", "default": "whatsapp-meta"}
+    ],
+    "nodes": [
+      {
+        "name": "WhatsApp Webhook",
+        "type": "webhook",
+        "_v": 2,
+        "_id": "node-webhook-001",
+        "params": {
+          "httpMethod": "GET",
+          "path": "whatsapp-meta",
+          "responseMode": "responseNode"
+        }
+      },
+      {
+        "name": "GET Verify Challenge",
+        "type": "respondToWebhook",
+        "_id": "node-respond-verify-001",
+        "params": {
+          "respondWith": "text",
+          "responseBody": "={{ $json.query['hub.challenge'] }}"
+        }
+      },
+      {
+        "name": "POST Webhook",
+        "type": "webhook",
+        "_v": 2,
+        "_id": "node-webhook-002",
+        "params": {
+          "httpMethod": "POST",
+          "path": "whatsapp-meta",
+          "responseMode": "responseNode"
+        }
+      },
+      {
+        "name": "Acknowledge POST",
+        "type": "respondToWebhook",
+        "_id": "node-respond-002",
+        "params": {
+          "respondWith": "json",
+          "responseBody": "{\"status\": \"ok\"}"
+        }
+      },
+      {
+        "name": "Has Message",
+        "type": "if",
+        "_v": 2,
+        "_id": "node-filter-001",
+        "params": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {
+                "id": "cond-1",
+                "leftValue": "={{ $json.body.entry?.[0]?.changes?.[0]?.value?.messages !== undefined }}",
+                "rightValue": true,
+                "operator": {"type": "boolean", "operation": "equals"}
+              }
+            ],
+            "combinator": "and"
+          }
+        }
+      },
+      {
+        "name": "Extract Message",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-set-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {
+            "assignments": [
+              {
+                "id": "1",
+                "name": "senderPhone",
+                "value": "={{ $json.body.entry[0].changes[0].value.messages[0].from }}",
+                "type": "string"
+              },
+              {
+                "id": "2",
+                "name": "senderName",
+                "value": "={{ $json.body.entry[0].changes[0].value.contacts[0].profile.name }}",
+                "type": "string"
+              },
+              {
+                "id": "3",
+                "name": "messageText",
+                "value": "={{ $json.body.entry[0].changes[0].value.messages[0].text?.body ?? '' }}",
+                "type": "string"
+              },
+              {
+                "id": "4",
+                "name": "messageType",
+                "value": "={{ $json.body.entry[0].changes[0].value.messages[0].type }}",
+                "type": "string"
+              },
+              {
+                "id": "5",
+                "name": "phoneNumberId",
+                "value": "={{ $json.body.entry[0].changes[0].value.metadata.phone_number_id }}",
+                "type": "string"
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "flow": [
+      {"from": "WhatsApp Webhook", "to": "GET Verify Challenge"},
+      {"from": "POST Webhook", "to": "Acknowledge POST"},
+      {"from": "POST Webhook", "to": "Has Message"},
+      {"from": "Has Message", "to": "Extract Message"}
+    ],
+    "notes": "ATENÇÃO: n8n não permite dois webhooks com o mesmo path mas métodos diferentes. Use um webhook com httpMethod='ALL' e IF para separar GET vs POST. Configure META_VERIFY_TOKEN no painel Meta com o mesmo valor do env var."
+  },
+
+  {
+    "id": "whatsapp-evolution-ai-agent-meta",
+    "name": "WhatsApp Bot - Meta Cloud API + AI Agent",
+    "description": "Bot completo com Meta WhatsApp Business API, AI Agent com memória por sessão. Inclui tratamento de verificação de webhook.",
+    "tags": ["whatsapp", "meta-cloud", "ai-agent", "customer-service", "memory"],
+    "complexity": "advanced",
+    "estimatedNodes": 10,
+    "requiredParams": [
+      {"key": "META_ACCESS_TOKEN", "description": "Token de acesso permanente (System User Token da Meta)", "envVar": true},
+      {"key": "META_PHONE_NUMBER_ID", "description": "ID do número de telefone na Meta Business", "envVar": true},
+      {"key": "META_VERIFY_TOKEN", "description": "Token de verificação do webhook (você define)", "envVar": true},
+      {"key": "webhookPath", "description": "Caminho do webhook", "default": "whatsapp-meta"},
+      {"key": "openaiModel", "description": "Modelo OpenAI", "default": "gpt-4o-mini"},
+      {"key": "systemPrompt", "description": "Prompt do sistema / persona do agente"}
+    ],
+    "nodes": [
+      {
+        "name": "WhatsApp Webhook",
+        "type": "webhook",
+        "_v": 2,
+        "_id": "node-webhook-001",
+        "params": {
+          "httpMethod": "ALL",
+          "path": "whatsapp-meta",
+          "responseMode": "responseNode"
+        }
+      },
+      {
+        "name": "Is GET Verification",
+        "type": "if",
+        "_v": 2,
+        "_id": "node-is-get-001",
+        "params": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {
+                "id": "cond-1",
+                "leftValue": "={{ $json.headers['x-http-method'] ?? $json.method }}",
+                "rightValue": "GET",
+                "operator": {"type": "string", "operation": "equals"}
+              }
+            ],
+            "combinator": "and"
+          }
+        }
+      },
+      {
+        "name": "Verify Webhook Challenge",
+        "type": "respondToWebhook",
+        "_id": "node-respond-verify-001",
+        "params": {
+          "respondWith": "text",
+          "responseBody": "={{ $json.query['hub.challenge'] }}"
+        }
+      },
+      {
+        "name": "Acknowledge POST",
+        "type": "respondToWebhook",
+        "_id": "node-respond-post-001",
+        "params": {
+          "respondWith": "json",
+          "responseBody": "{\"status\": \"ok\"}"
+        }
+      },
+      {
+        "name": "Has Text Message",
+        "type": "if",
+        "_v": 2,
+        "_id": "node-has-message-001",
+        "params": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {
+                "id": "cond-1",
+                "leftValue": "={{ $json.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.type }}",
+                "rightValue": "text",
+                "operator": {"type": "string", "operation": "equals"}
+              }
+            ],
+            "combinator": "and"
+          }
+        }
+      },
+      {
+        "name": "Extract Message",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-set-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {
+            "assignments": [
+              {"id": "1", "name": "senderPhone", "value": "={{ $json.body.entry[0].changes[0].value.messages[0].from }}", "type": "string"},
+              {"id": "2", "name": "senderName", "value": "={{ $json.body.entry[0].changes[0].value.contacts?.[0]?.profile?.name ?? 'Usuário' }}", "type": "string"},
+              {"id": "3", "name": "messageText", "value": "={{ $json.body.entry[0].changes[0].value.messages[0].text.body }}", "type": "string"},
+              {"id": "4", "name": "phoneNumberId", "value": "={{ $json.body.entry[0].changes[0].value.metadata.phone_number_id }}", "type": "string"}
+            ]
+          }
+        }
+      },
+      {
+        "name": "OpenAI Chat Model",
+        "type": "langchain:lmChatOpenAi",
+        "_v": 1,
+        "_id": "node-llm-001",
+        "creds": {"openAiApi": "OpenAI API"},
+        "params": {
+          "model": {"__rl": true, "value": "gpt-4o-mini", "mode": "list"}
+        }
+      },
+      {
+        "name": "Session Memory",
+        "type": "langchain:memoryBufferWindow",
+        "_v": 1,
+        "_id": "node-memory-001",
+        "params": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $('Extract Message').first().json.senderPhone }}",
+          "contextWindowLength": 10
+        }
+      },
+      {
+        "name": "AI Agent",
+        "type": "langchain:agent",
+        "_v": 1,
+        "_id": "node-agent-001",
+        "params": {
+          "promptType": "define",
+          "text": "={{ $('Extract Message').first().json.messageText }}",
+          "options": {
+            "systemMessage": "Você é um assistente de atendimento ao cliente prestativo e amigável. Responda sempre em português."
+          }
+        }
+      },
+      {
+        "name": "Send WhatsApp Reply",
+        "type": "httpRequest",
+        "_v": 4,
+        "_id": "node-http-001",
+        "params": {
+          "method": "POST",
+          "url": "=https://graph.facebook.com/v18.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {"name": "Authorization", "value": "=Bearer {{ $env.META_ACCESS_TOKEN }}"},
+              {"name": "Content-Type", "value": "application/json"}
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={ \"messaging_product\": \"whatsapp\", \"to\": \"{{ $('Extract Message').first().json.senderPhone }}\", \"type\": \"text\", \"text\": { \"body\": \"{{ $('AI Agent').first().json.output.replace(/\"/g, '\\\\\"') }}\" } }"
+        }
+      }
+    ],
+    "flow": [
+      {"from": "WhatsApp Webhook", "to": "Is GET Verification"},
+      {"from": "Is GET Verification", "to": "Verify Webhook Challenge"},
+      {"from": "Is GET Verification", "to": "Acknowledge POST", "outputIndex": 1},
+      {"from": "Is GET Verification", "to": "Has Text Message", "outputIndex": 1},
+      {"from": "Has Text Message", "to": "Extract Message"},
+      {"from": "Extract Message", "to": "AI Agent"},
+      {"from": "OpenAI Chat Model", "to": "AI Agent", "type": "ai_languageModel"},
+      {"from": "Session Memory", "to": "AI Agent", "type": "ai_memory"},
+      {"from": "AI Agent", "to": "Send WhatsApp Reply"}
+    ],
+    "notes": "Configure META_ACCESS_TOKEN, META_PHONE_NUMBER_ID e META_VERIFY_TOKEN como variáveis de ambiente. Customize o systemMessage no AI Agent node."
+  },
+
+  {
+    "id": "ai-agent-basic",
+    "name": "AI Agent Básico (sem memória)",
+    "description": "AI Agent simples conectado a um LLM OpenAI. Sem memória de sessão. Use como base para adicionar ferramentas e customizar o prompt.",
+    "tags": ["ai-agent", "openai", "basic", "template"],
+    "complexity": "simple",
+    "estimatedNodes": 3,
+    "requiredParams": [
+      {"key": "openaiModel", "description": "Modelo OpenAI", "options": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"], "default": "gpt-4o-mini"},
+      {"key": "systemPrompt", "description": "Prompt do sistema (persona e instruções do agente)"},
+      {"key": "inputExpression", "description": "Expressão para o input do usuário", "default": "={{ $json.chatInput }}"}
+    ],
+    "nodes": [
+      {
+        "name": "OpenAI Chat Model",
+        "type": "langchain:lmChatOpenAi",
+        "_v": 1,
+        "_id": "node-llm-001",
+        "creds": {"openAiApi": "OpenAI API"},
+        "params": {
+          "model": {"__rl": true, "value": "gpt-4o-mini", "mode": "list"}
+        }
+      },
+      {
+        "name": "AI Agent",
+        "type": "langchain:agent",
+        "_v": 1,
+        "_id": "node-agent-001",
+        "params": {
+          "promptType": "define",
+          "text": "={{ $json.chatInput }}",
+          "options": {
+            "systemMessage": "Você é um assistente prestativo. Responda sempre em português de forma clara e concisa."
+          }
+        }
+      },
+      {
+        "name": "Format Response",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-set-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {
+            "assignments": [
+              {"id": "1", "name": "response", "value": "={{ $json.output }}", "type": "string"}
+            ]
+          }
+        }
+      }
+    ],
+    "flow": [
+      {"from": "OpenAI Chat Model", "to": "AI Agent", "type": "ai_languageModel"},
+      {"from": "AI Agent", "to": "Format Response"}
+    ],
+    "notes": "O AI Agent recebe input via 'text' param. Para conectar com webhook ou outro trigger, adicione um node de entrada e ajuste a expressão em params.text do AI Agent."
+  },
+
+  {
+    "id": "ai-agent-with-memory",
+    "name": "AI Agent com Memória de Sessão",
+    "description": "AI Agent com Window Buffer Memory para manter contexto de conversas. A chave de sessão pode ser qualquer identificador único (phone, userId, sessionId).",
+    "tags": ["ai-agent", "openai", "memory", "conversation", "session"],
+    "complexity": "intermediate",
+    "estimatedNodes": 4,
+    "requiredParams": [
+      {"key": "openaiModel", "description": "Modelo OpenAI", "default": "gpt-4o-mini"},
+      {"key": "systemPrompt", "description": "Prompt do sistema / persona"},
+      {"key": "sessionKeyExpression", "description": "Expressão para a chave de sessão única por usuário", "example": "={{ $json.userId }}"},
+      {"key": "contextWindowLength", "description": "Número de mensagens no histórico", "default": 10}
+    ],
+    "nodes": [
+      {
+        "name": "OpenAI Chat Model",
+        "type": "langchain:lmChatOpenAi",
+        "_v": 1,
+        "_id": "node-llm-001",
+        "creds": {"openAiApi": "OpenAI API"},
+        "params": {
+          "model": {"__rl": true, "value": "gpt-4o-mini", "mode": "list"}
+        }
+      },
+      {
+        "name": "Session Memory",
+        "type": "langchain:memoryBufferWindow",
+        "_v": 1,
+        "_id": "node-memory-001",
+        "params": {
+          "sessionIdType": "customKey",
+          "sessionKey": "={{ $('Input').first().json.sessionId }}",
+          "contextWindowLength": 10
+        }
+      },
+      {
+        "name": "AI Agent",
+        "type": "langchain:agent",
+        "_v": 1,
+        "_id": "node-agent-001",
+        "params": {
+          "promptType": "define",
+          "text": "={{ $('Input').first().json.userMessage }}",
+          "options": {
+            "systemMessage": "Você é um assistente prestativo com memória de conversas anteriores. Responda em português."
+          }
+        }
+      },
+      {
+        "name": "Format Response",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-set-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {
+            "assignments": [
+              {"id": "1", "name": "response", "value": "={{ $json.output }}", "type": "string"},
+              {"id": "2", "name": "sessionId", "value": "={{ $('Input').first().json.sessionId }}", "type": "string"}
+            ]
+          }
+        }
+      }
+    ],
+    "flow": [
+      {"from": "OpenAI Chat Model", "to": "AI Agent", "type": "ai_languageModel"},
+      {"from": "Session Memory", "to": "AI Agent", "type": "ai_memory"},
+      {"from": "AI Agent", "to": "Format Response"}
+    ],
+    "notes": "Renomeie 'Input' para o nome do seu node de entrada real e ajuste as expressões sessionKey e text no AI Agent e Session Memory."
+  },
+
+  {
+    "id": "webhook-router",
+    "name": "Webhook com Roteamento por Switch",
+    "description": "Template de webhook que roteia para diferentes handlers baseado em um campo do payload (evento, tipo, ação, etc.). Inclui fallback para eventos não mapeados.",
+    "tags": ["webhook", "switch", "routing", "template"],
+    "complexity": "intermediate",
+    "estimatedNodes": 7,
+    "requiredParams": [
+      {"key": "webhookPath", "description": "Caminho do webhook", "default": "webhook"},
+      {"key": "routingField", "description": "Campo do JSON para rotear (ex: event, type, action)", "example": "={{ $json.body.event }}"},
+      {"key": "route1Value", "description": "Valor da rota 1", "example": "order.created"},
+      {"key": "route2Value", "description": "Valor da rota 2", "example": "order.updated"}
+    ],
+    "nodes": [
+      {
+        "name": "Incoming Webhook",
+        "type": "webhook",
+        "_v": 2,
+        "_id": "node-webhook-001",
+        "params": {
+          "httpMethod": "POST",
+          "path": "my-events",
+          "responseMode": "responseNode"
+        }
+      },
+      {
+        "name": "Acknowledge",
+        "type": "respondToWebhook",
+        "_id": "node-respond-001",
+        "params": {
+          "respondWith": "json",
+          "responseBody": "{\"status\": \"received\"}"
+        }
+      },
+      {
+        "name": "Route by Event",
+        "type": "switch",
+        "_v": 3,
+        "_id": "node-switch-001",
+        "params": {
+          "mode": "rules",
+          "dataType": "string",
+          "value": "={{ $json.body.event }}",
+          "rules": {
+            "rules": [
+              {
+                "conditions": {
+                  "options": {"caseSensitive": true},
+                  "conditions": [{"leftValue": "={{ $json.body.event }}", "rightValue": "event.type1", "operator": {"type": "string", "operation": "equals"}}]
+                },
+                "renameOutput": true,
+                "outputKey": "Type 1"
+              },
+              {
+                "conditions": {
+                  "options": {"caseSensitive": true},
+                  "conditions": [{"leftValue": "={{ $json.body.event }}", "rightValue": "event.type2", "operator": {"type": "string", "operation": "equals"}}]
+                },
+                "renameOutput": true,
+                "outputKey": "Type 2"
+              }
+            ]
+          },
+          "options": {
+            "fallbackOutput": "extra"
+          }
+        }
+      },
+      {
+        "name": "Handle Event Type 1",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-handle1-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {"assignments": [{"id": "1", "name": "action", "value": "Processando Tipo 1", "type": "string"}]}
+        }
+      },
+      {
+        "name": "Handle Event Type 2",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-handle2-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {"assignments": [{"id": "1", "name": "action", "value": "Processando Tipo 2", "type": "string"}]}
+        }
+      },
+      {
+        "name": "Handle Unknown Event",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-handle-fallback-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {"assignments": [{"id": "1", "name": "action", "value": "=Evento desconhecido: {{ $json.body.event }}", "type": "string"}]}
+        }
+      }
+    ],
+    "flow": [
+      {"from": "Incoming Webhook", "to": "Acknowledge"},
+      {"from": "Incoming Webhook", "to": "Route by Event"},
+      {"from": "Route by Event", "to": "Handle Event Type 1"},
+      {"from": "Route by Event", "to": "Handle Event Type 2", "outputIndex": 1},
+      {"from": "Route by Event", "to": "Handle Unknown Event", "outputIndex": 2}
+    ],
+    "notes": "IMPORTANTE: O Switch tem fallbackOutput='extra' configurado — sem isso, eventos não mapeados seriam DESCARTADOS silenciosamente. Ajuste os valores de roteamento e adicione handlers reais substituindo os nodes Set de exemplo."
+  },
+
+  {
+    "id": "http-api-integration",
+    "name": "Integração com API Externa via HTTP",
+    "description": "Template para consumir API externa com autenticação, tratamento de erro e retry. Útil como base para qualquer integração REST.",
+    "tags": ["http", "api", "integration", "rest", "template"],
+    "complexity": "simple",
+    "estimatedNodes": 4,
+    "requiredParams": [
+      {"key": "apiBaseUrl", "description": "URL base da API (ex: https://api.exemplo.com/v1)"},
+      {"key": "endpoint", "description": "Endpoint específico (ex: /users)"},
+      {"key": "authType", "description": "Tipo de auth", "options": ["Bearer Token", "API Key Header", "No Auth"]},
+      {"key": "authValue", "description": "Valor do token/key de autenticação", "envVar": true}
+    ],
+    "nodes": [
+      {
+        "name": "Fetch from API",
+        "type": "httpRequest",
+        "_v": 4,
+        "_id": "node-http-001",
+        "params": {
+          "method": "GET",
+          "url": "=https://api.exemplo.com/v1/endpoint",
+          "authentication": "genericCredentialType",
+          "genericAuthType": "httpHeaderAuth",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {"name": "Authorization", "value": "=Bearer {{ $env.API_TOKEN }}"}
+            ]
+          }
+        }
+      },
+      {
+        "name": "Request Succeeded",
+        "type": "if",
+        "_v": 2,
+        "_id": "node-check-001",
+        "params": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {
+                "id": "cond-1",
+                "leftValue": "={{ $json.statusCode ?? 200 }}",
+                "rightValue": 400,
+                "operator": {"type": "number", "operation": "lt"}
+              }
+            ],
+            "combinator": "and"
+          }
+        }
+      },
+      {
+        "name": "Process Success",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-success-001",
+        "params": {
+          "mode": "passThrough"
+        }
+      },
+      {
+        "name": "Handle Error",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-error-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {
+            "assignments": [
+              {"id": "1", "name": "error", "value": "=API retornou erro: {{ $json.statusCode }}", "type": "string"},
+              {"id": "2", "name": "details", "value": "={{ JSON.stringify($json) }}", "type": "string"}
+            ]
+          }
+        }
+      }
+    ],
+    "flow": [
+      {"from": "Fetch from API", "to": "Request Succeeded"},
+      {"from": "Request Succeeded", "to": "Process Success"},
+      {"from": "Request Succeeded", "to": "Handle Error", "outputIndex": 1}
+    ],
+    "notes": "Substitua a URL e endpoint reais. Configure o token como variável de ambiente. O node 'Process Success' usa passThrough — substitua por lógica real."
+  },
+
+  {
+    "id": "whatsapp-evolution-menu-bot",
+    "name": "WhatsApp Menu Bot - Evolution API (sem AI)",
+    "description": "Bot de atendimento com menu navegável via texto. Usuário digita 1, 2, 3 etc. para navegar. Sem AI — lógica determinística com Switch. Bom para FAQs e menus fixos.",
+    "tags": ["whatsapp", "evolution-api", "menu", "switch", "no-ai", "faq"],
+    "complexity": "intermediate",
+    "estimatedNodes": 9,
+    "requiredParams": [
+      {"key": "EVOLUTION_API_URL", "description": "URL base da Evolution API", "envVar": true},
+      {"key": "EVOLUTION_API_KEY", "description": "API Key", "envVar": true},
+      {"key": "EVOLUTION_INSTANCE", "description": "Nome da instância", "envVar": true},
+      {"key": "menu1Text", "description": "Texto da opção 1 do menu"},
+      {"key": "menu2Text", "description": "Texto da opção 2 do menu"}
+    ],
+    "nodes": [
+      {
+        "name": "WhatsApp Webhook",
+        "type": "webhook",
+        "_v": 2,
+        "_id": "node-webhook-001",
+        "params": {
+          "httpMethod": "POST",
+          "path": "whatsapp-menu",
+          "responseMode": "responseNode"
+        }
+      },
+      {
+        "name": "Acknowledge",
+        "type": "respondToWebhook",
+        "_id": "node-respond-001",
+        "params": {
+          "respondWith": "json",
+          "responseBody": "{\"status\": \"ok\"}"
+        }
+      },
+      {
+        "name": "Filter Valid Messages",
+        "type": "if",
+        "_v": 2,
+        "_id": "node-filter-001",
+        "params": {
+          "conditions": {
+            "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+            "conditions": [
+              {"id": "1", "leftValue": "={{ $json.event }}", "rightValue": "messages.upsert", "operator": {"type": "string", "operation": "equals"}},
+              {"id": "2", "leftValue": "={{ $json.data.key.fromMe }}", "rightValue": false, "operator": {"type": "boolean", "operation": "equals"}}
+            ],
+            "combinator": "and"
+          }
+        }
+      },
+      {
+        "name": "Extract Input",
+        "type": "set",
+        "_v": 3,
+        "_id": "node-extract-001",
+        "params": {
+          "mode": "manual",
+          "assignments": {
+            "assignments": [
+              {"id": "1", "name": "phone", "value": "={{ $json.data.key.remoteJid.replace('@s.whatsapp.net', '') }}", "type": "string"},
+              {"id": "2", "name": "input", "value": "={{ ($json.data.message.conversation ?? '').trim().toLowerCase() }}", "type": "string"}
+            ]
+          }
+        }
+      },
+      {
+        "name": "Route Menu",
+        "type": "switch",
+        "_v": 3,
+        "_id": "node-switch-001",
+        "params": {
+          "mode": "rules",
+          "dataType": "string",
+          "value": "={{ $json.input }}",
+          "rules": {
+            "rules": [
+              {"conditions": {"conditions": [{"leftValue": "={{ $json.input }}", "rightValue": "1", "operator": {"type": "string", "operation": "equals"}}]}, "renameOutput": true, "outputKey": "Opção 1"},
+              {"conditions": {"conditions": [{"leftValue": "={{ $json.input }}", "rightValue": "2", "operator": {"type": "string", "operation": "equals"}}]}, "renameOutput": true, "outputKey": "Opção 2"}
+            ]
+          },
+          "options": {"fallbackOutput": "extra"}
+        }
+      },
+      {
+        "name": "Reply Option 1",
+        "type": "httpRequest",
+        "_v": 4,
+        "_id": "node-send1-001",
+        "params": {
+          "method": "POST",
+          "url": "={{ $env.EVOLUTION_API_URL }}/message/sendText/={{ $env.EVOLUTION_INSTANCE }}",
+          "sendHeaders": true,
+          "headerParameters": {"parameters": [{"name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}"}]},
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={ \"number\": \"{{ $('Extract Input').first().json.phone }}\", \"text\": \"Você selecionou a Opção 1!\\n\\nResposta da opção 1 aqui.\" }"
+        }
+      },
+      {
+        "name": "Reply Option 2",
+        "type": "httpRequest",
+        "_v": 4,
+        "_id": "node-send2-001",
+        "params": {
+          "method": "POST",
+          "url": "={{ $env.EVOLUTION_API_URL }}/message/sendText/={{ $env.EVOLUTION_INSTANCE }}",
+          "sendHeaders": true,
+          "headerParameters": {"parameters": [{"name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}"}]},
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={ \"number\": \"{{ $('Extract Input').first().json.phone }}\", \"text\": \"Você selecionou a Opção 2!\\n\\nResposta da opção 2 aqui.\" }"
+        }
+      },
+      {
+        "name": "Reply Main Menu",
+        "type": "httpRequest",
+        "_v": 4,
+        "_id": "node-send-menu-001",
+        "params": {
+          "method": "POST",
+          "url": "={{ $env.EVOLUTION_API_URL }}/message/sendText/={{ $env.EVOLUTION_INSTANCE }}",
+          "sendHeaders": true,
+          "headerParameters": {"parameters": [{"name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}"}]},
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={ \"number\": \"{{ $('Extract Input').first().json.phone }}\", \"text\": \"Olá! Como posso ajudar?\\n\\n*1* - Informações\\n*2* - Suporte\\n\\nDigite o número da opção desejada.\" }"
+        }
+      }
+    ],
+    "flow": [
+      {"from": "WhatsApp Webhook", "to": "Acknowledge"},
+      {"from": "WhatsApp Webhook", "to": "Filter Valid Messages"},
+      {"from": "Filter Valid Messages", "to": "Extract Input"},
+      {"from": "Extract Input", "to": "Route Menu"},
+      {"from": "Route Menu", "to": "Reply Option 1"},
+      {"from": "Route Menu", "to": "Reply Option 2", "outputIndex": 1},
+      {"from": "Route Menu", "to": "Reply Main Menu", "outputIndex": 2}
+    ],
+    "notes": "O Switch roteia '1' e '2' para handlers específicos. Qualquer outra entrada cai no fallback que mostra o menu principal. Adicione mais opções replicando os patterns do Switch e HTTP Request."
+  }
+]

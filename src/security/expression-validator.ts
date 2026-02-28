@@ -94,6 +94,29 @@ export function validateExpression(
           fix: "Flatten nested expressions into a single {{ }} block.",
         });
       }
+
+      // Rule 6: Common n8n reference issues
+      // Bare $json without field path
+      if (expr.trim() === "$json" || expr.trim() === "$json.") {
+        warnings.push({
+          type: "expression_hint",
+          node: nodeName,
+          property: propertyPath,
+          message: `Bare "$json" reference without a field path: "${truncate(value, 60)}".`,
+          suggestion: `Specify a field: {{ $json.fieldName }}`,
+        });
+      }
+
+      // Legacy $node syntax (deprecated)
+      if (expr.includes("$node[") || expr.includes("$node.")) {
+        warnings.push({
+          type: "expression_hint",
+          node: nodeName,
+          property: propertyPath,
+          message: `Legacy $node reference found. Use $('NodeName') syntax instead.`,
+          suggestion: `Replace $node["NodeName"].data with $('NodeName').item.json`,
+        });
+      }
     }
   }
 

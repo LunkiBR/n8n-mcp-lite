@@ -1,0 +1,320 @@
+[
+  {
+    "id": "switch-no-fallthrough",
+    "title": "Switch Node: itens sem match são DESCARTADOS silenciosamente",
+    "description": "O Switch node não tem output padrão implícito. Qualquer item que não satisfaça nenhuma regra é silenciosamente descartado — sem erro, sem log. Isso causa perda de dados difícil de debugar.",
+    "tags": ["switch", "routing", "data-loss", "gotcha"],
+    "nodeTypes": ["n8n-nodes-base.switch"],
+    "solution": "Sempre configure 'Fallback Output' nas Settings do Switch (parâmetro options.fallbackOutput = 'extra'). Isso cria um output adicional que recebe todos os não-matches.",
+    "exampleFix": {
+      "params": {
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      }
+    }
+  },
+  {
+    "id": "ai-agent-output-field",
+    "title": "AI Agent: a resposta fica em $json.output, NÃO em $json.response",
+    "description": "A resposta textual do AI Agent está SEMPRE em $json.output. Usar $json.response, $json.text, $json.message ou $json.answer resulta em undefined.",
+    "tags": ["ai-agent", "expressions", "output", "langchain", "gotcha"],
+    "nodeTypes": ["@n8n/n8n-nodes-langchain.agent"],
+    "solution": "Use ={{ $json.output }} para acessar a resposta. Para referenciar de outro node após branches: ={{ $('AI Agent').first().json.output }}",
+    "examples": [
+      "={{ $json.output }}",
+      "={{ $('AI Agent').first().json.output }}",
+      "={{ $('My Agent Node').last().json.output }}"
+    ]
+  },
+  {
+    "id": "ai-agent-prompttype",
+    "title": "AI Agent: use promptType='define' quando não há Chat Trigger",
+    "description": "Por padrão, o AI Agent espera estar conectado a um Chat Trigger para receber input. Quando o input vem de outro node (Webhook, Set, etc.), é preciso definir promptType='define' e o campo 'text' com a expressão do input.",
+    "tags": ["ai-agent", "configuration", "langchain", "gotcha"],
+    "nodeTypes": ["@n8n/n8n-nodes-langchain.agent"],
+    "solution": "Set params.promptType='define' e params.text com a expressão que traz o conteúdo da mensagem do usuário.",
+    "exampleConfig": {
+      "promptType": "define",
+      "text": "={{ $('Extract Message').first().json.messageText }}"
+    }
+  },
+  {
+    "id": "ai-memory-session-key",
+    "title": "AI Memory: precisa de sessionIdType='customKey' para sessões por usuário",
+    "description": "Por padrão, a memória usa o ID de execução como chave de sessão — isso significa que cada execução começa do zero. Para manter histórico por usuário (WhatsApp sender, Telegram ID, etc.), configure sessionIdType='customKey' e forneça uma expressão única por usuário.",
+    "tags": ["ai-agent", "memory", "session", "langchain", "whatsapp"],
+    "nodeTypes": ["@n8n/n8n-nodes-langchain.memoryBufferWindow"],
+    "solution": "Set sessionIdType='customKey' e sessionKey com expressão que identifique unicamente o usuário.",
+    "exampleConfig": {
+      "sessionIdType": "customKey",
+      "sessionKey": "={{ $('Extract Message').first().json.senderPhone }}",
+      "contextWindowLength": 10
+    }
+  },
+  {
+    "id": "ai-wiring-connection-types",
+    "title": "AI Sub-nodes: requerem tipos de connection especiais no flow",
+    "description": "AI Agent, Vector Store e Chains precisam de connections com type específico para receber sub-nodes (LLM, Memory, Tools, etc.). O type padrão 'main' NÃO funciona para esses wires. No formato simplificado, adicione 'type' ao objeto de conexão.",
+    "tags": ["ai-agent", "wiring", "langchain", "connection-types"],
+    "nodeTypes": ["@n8n/n8n-nodes-langchain.agent", "@n8n/n8n-nodes-langchain.chainLlm"],
+    "connectionTypes": {
+      "ai_languageModel": "LLM nodes (OpenAI, Anthropic, Ollama, Mistral) → AI Agent / Chain",
+      "ai_memory": "Memory Buffer → AI Agent",
+      "ai_tool": "Tool nodes (Calculator, HTTP, etc.) → AI Agent",
+      "ai_document": "Document Loaders → Vector Store",
+      "ai_embedding": "Embedding nodes → Vector Store",
+      "ai_textSplitter": "Text Splitter → Document Loader",
+      "ai_retriever": "Vector Store Retriever → QA Chain"
+    },
+    "exampleFlow": [
+      {"from": "OpenAI Chat Model", "to": "AI Agent", "type": "ai_languageModel"},
+      {"from": "Window Buffer Memory", "to": "AI Agent", "type": "ai_memory"},
+      {"from": "Calculator Tool", "to": "AI Agent", "type": "ai_tool"},
+      {"from": "Previous Node", "to": "AI Agent"}
+    ]
+  },
+  {
+    "id": "postgres-0-row-empty",
+    "title": "Postgres/MySQL: SELECT sem resultados passa item vazio, não interrompe fluxo",
+    "description": "Quando um SELECT retorna 0 rows, o banco de dados node passa um item com campos undefined — não para o fluxo e não emite erro. Um IF verificando $json.session_id === 'algo' vai quebrar silenciosamente pois o valor é undefined.",
+    "tags": ["postgres", "mysql", "database", "conditional", "gotcha"],
+    "nodeTypes": ["n8n-nodes-base.postgres", "n8n-nodes-base.mySql"],
+    "solution": "Use 'exists' ou 'not exists' como operação no IF node, em vez de comparar o valor diretamente.",
+    "exampleCondition": {
+      "leftValue": "={{ $json.session_id }}",
+      "operator": "exists"
+    }
+  },
+  {
+    "id": "meta-webhook-verification",
+    "title": "Meta Cloud API: webhook precisa responder ao desafio GET de verificação",
+    "description": "Ao registrar o webhook na Meta Business API, o servidor da Meta faz um GET com ?hub.mode=subscribe&hub.verify_token=SEU_TOKEN&hub.challenge=XXXXX. O endpoint PRECISA responder com o valor de hub.challenge como texto puro (status 200). Sem isso, o webhook não é registrado.",
+    "tags": ["whatsapp", "meta", "webhook", "setup", "verification"],
+    "nodeTypes": ["n8n-nodes-base.webhook"],
+    "solution": "Adicione um IF logo após o Webhook: se httpMethod === 'GET', use o node 'Respond to Webhook' retornando $json.query['hub.challenge']. Se POST, processe a mensagem.",
+    "patternRef": "whatsapp-meta-verifier",
+    "verifyTokenParam": "hub.verify_token",
+    "challengeParam": "hub.challenge",
+    "responseFormat": "text/plain"
+  },
+  {
+    "id": "cross-branch-expression",
+    "title": "Expressões em branches: use $('NodeName').first() para referenciar outro branch",
+    "description": "Após um IF/Switch, os branches ficam isolados. Dentro de um branch, $input e $json referem-se ao node imediatamente anterior dentro do mesmo branch. Para acessar dados de um node em outro branch (ou anterior ao IF/Switch), use $('NomeExatoDoNode').first().json.",
+    "tags": ["expressions", "branches", "if", "switch", "cross-reference"],
+    "solution": "Sempre que precisar de dados de um node que não está no fluxo direto, referencie pelo nome: $('NomeDoNode').first().json.campo",
+    "examples": [
+      "={{ $('Extract Message').first().json.senderPhone }}",
+      "={{ $('AI Agent').first().json.output }}",
+      "={{ $('Webhook').first().json.body.event }}",
+      "={{ $('Set Variables').first().json.userId }}"
+    ]
+  },
+  {
+    "id": "webhook-response-mode",
+    "title": "Webhook: responseMode='responseNode' para controlar quando responder",
+    "description": "Por padrão, o Webhook responde imediatamente com o resultado do último node. Para workflows onde você precisa processar antes de responder (ou não responder nada), use responseMode='responseNode' e adicione um 'Respond to Webhook' node no local correto.",
+    "tags": ["webhook", "response", "async"],
+    "nodeTypes": ["n8n-nodes-base.webhook"],
+    "solution": "Set params.responseMode='responseNode' no Webhook. Adicione 'respondToWebhook' onde precisar enviar a resposta.",
+    "exampleConfig": {
+      "httpMethod": "POST",
+      "path": "my-webhook",
+      "responseMode": "responseNode"
+    }
+  },
+  {
+    "id": "evolution-send-message-format",
+    "title": "Evolution API: formato correto para enviar mensagem de texto",
+    "description": "A Evolution API v2 requer um POST para /message/sendText/{instanceName} com body contendo 'number' (com DDI) e 'text'. O header 'apikey' é obrigatório. A URL base varia por instalação.",
+    "tags": ["evolution-api", "whatsapp", "send", "http"],
+    "solution": "HTTP Request POST com body {number, text} e header apikey.",
+    "exampleConfig": {
+      "method": "POST",
+      "url": "={{ $env.EVOLUTION_API_URL }}/message/sendText/={{ $env.EVOLUTION_INSTANCE }}",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {"name": "apikey", "value": "={{ $env.EVOLUTION_API_KEY }}"}
+        ]
+      },
+      "sendBody": true,
+      "contentType": "json",
+      "body": {
+        "number": "={{ $('Extract Message').first().json.senderPhone }}",
+        "text": "={{ $('AI Agent').first().json.output }}"
+      }
+    }
+  },
+  {
+    "id": "meta-send-message-format",
+    "title": "Meta Cloud API: formato correto para enviar mensagem de texto",
+    "description": "A Meta WhatsApp Business API requer um POST para /PHONE_NUMBER_ID/messages com Authorization Bearer TOKEN. O body deve seguir o formato específico da API.",
+    "tags": ["meta", "whatsapp", "send", "http"],
+    "solution": "HTTP Request POST para graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages",
+    "exampleConfig": {
+      "method": "POST",
+      "url": "=https://graph.facebook.com/v18.0/{{ $env.META_PHONE_NUMBER_ID }}/messages",
+      "authentication": "genericCredentialType",
+      "genericAuthType": "httpHeaderAuth",
+      "sendHeaders": true,
+      "headerParameters": {
+        "parameters": [
+          {"name": "Authorization", "value": "=Bearer {{ $env.META_ACCESS_TOKEN }}"}
+        ]
+      },
+      "sendBody": true,
+      "contentType": "json",
+      "body": {
+        "messaging_product": "whatsapp",
+        "to": "={{ $('Extract Message').first().json.senderPhone }}",
+        "type": "text",
+        "text": {
+          "body": "={{ $('AI Agent').first().json.output }}"
+        }
+      }
+    }
+  },
+  {
+    "id": "env-variable-access",
+    "title": "$env: como acessar variáveis de ambiente do n8n",
+    "description": "No n8n, variáveis de ambiente configuradas no servidor (ou no painel de Environment Variables do n8n Cloud) são acessíveis via $env.NOME_DA_VARIAVEL em expressões. Isso é preferível a hardcodar credenciais nos nodes.",
+    "tags": ["expressions", "env", "security", "configuration"],
+    "solution": "Defina variáveis em n8n Settings > Environment Variables (ou .env no servidor). Acesse com ={{ $env.NOME_VAR }}",
+    "examples": [
+      "={{ $env.EVOLUTION_API_URL }}",
+      "={{ $env.EVOLUTION_API_KEY }}",
+      "={{ $env.META_ACCESS_TOKEN }}",
+      "={{ $env.META_PHONE_NUMBER_ID }}"
+    ]
+  },
+  {
+    "id": "set-node-v3-format",
+    "title": "Set Node v3+: formato de assignments mudou (não use o formato legado)",
+    "description": "O Set node versão 3+ usa um formato de 'assignments' com array nomeado. O formato legado (values.string[], values.number[]) ainda funciona mas é v1/v2. Sempre use _v: 3 e o formato novo.",
+    "tags": ["set", "configuration", "version"],
+    "nodeTypes": ["n8n-nodes-base.set"],
+    "solution": "Use _v: 3 com formato assignments.assignments[]. Cada assignment tem id, name, value (expressão), type (string/number/boolean).",
+    "exampleConfig": {
+      "_v": 3,
+      "params": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {"id": "1", "name": "senderPhone", "value": "={{ $json.data.key.remoteJid }}", "type": "string"},
+            {"id": "2", "name": "messageText", "value": "={{ $json.data.message.conversation }}", "type": "string"}
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "if-node-v2-conditions-format",
+    "title": "IF Node v2+: formato de conditions mudou (use conditions.conditions[])",
+    "description": "O IF node v2+ usa um formato diferente do v1. As condições ficam em params.conditions.conditions[] com operator como objeto {type, operation}.",
+    "tags": ["if", "conditional", "version", "configuration"],
+    "nodeTypes": ["n8n-nodes-base.if"],
+    "solution": "Use _v: 2 com formato conditions.conditions[]. Cada condition tem leftValue, rightValue, operator {type, operation}.",
+    "exampleConfig": {
+      "_v": 2,
+      "params": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [
+            {
+              "id": "1",
+              "leftValue": "={{ $json.event }}",
+              "rightValue": "messages.upsert",
+              "operator": {"type": "string", "operation": "equals"}
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    }
+  },
+  {
+    "id": "evolution-filter-fromme",
+    "title": "Evolution API: filtrar mensagens enviadas pelo próprio bot",
+    "description": "A Evolution API envia webhooks tanto para mensagens recebidas quanto para mensagens enviadas pelo bot. Sem filtrar por key.fromMe=false, o bot cria um loop infinito respondendo às próprias mensagens.",
+    "tags": ["evolution-api", "whatsapp", "loop", "filter", "gotcha"],
+    "nodeTypes": ["n8n-nodes-base.if"],
+    "solution": "Adicione um IF node logo após o Webhook verificando: $json.event == 'messages.upsert' AND $json.data.key.fromMe == false",
+    "exampleConditions": [
+      {"leftValue": "={{ $json.event }}", "rightValue": "messages.upsert", "operator": {"type": "string", "operation": "equals"}},
+      {"leftValue": "={{ $json.data.key.fromMe }}", "rightValue": false, "operator": {"type": "boolean", "operation": "notEquals"}}
+    ]
+  },
+  {
+    "id": "http-request-v4-body-format",
+    "title": "HTTP Request v4+: body como objeto JSON ou parâmetros",
+    "description": "O HTTP Request node v4+ tem mudanças no formato do body. Para JSON body, use contentType='json' e specifyBody='keypair' com bodyParameters, ou specifyBody='json' com jsonBody string. Para envio via Evolution API, keypair é mais conveniente.",
+    "tags": ["http", "request", "configuration", "version"],
+    "nodeTypes": ["n8n-nodes-base.httpRequest"],
+    "solution": "Use _v: 4 com sendBody=true, contentType='json', specifyBody='keypair', bodyParameters.parameters[]",
+    "exampleConfig": {
+      "_v": 4,
+      "params": {
+        "method": "POST",
+        "url": "https://api.example.com/endpoint",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {"name": "field1", "value": "={{ $json.value1 }}"},
+            {"name": "field2", "value": "static_value"}
+          ]
+        }
+      }
+    }
+  },
+  {
+    "id": "if-unary-vs-binary-operators",
+    "title": "IF Node: operadores unários vs binários têm regras diferentes",
+    "description": "No IF node v2, operadores 'exists' e 'notExists' são UNÁRIOS — não usam rightValue. Operadores de comparação (equals, gt, lt, contains, etc.) são BINÁRIOS — requerem rightValue. Misturar isso causa erros de validação.",
+    "tags": ["if", "conditional", "validation", "operators"],
+    "nodeTypes": ["n8n-nodes-base.if"],
+    "solution": "Use 'exists'/'notExists' sem rightValue. Para comparação, use 'equals', 'gt', 'lt', 'contains', etc. com rightValue definido.",
+    "exampleConfig": {
+      "_v": 2,
+      "params": {
+        "conditions": {
+          "options": {"caseSensitive": true, "leftValue": "", "typeValidation": "strict"},
+          "conditions": [
+            {
+              "id": "1",
+              "leftValue": "={{ $json.userId }}",
+              "operator": {"type": "string", "operation": "exists"},
+              "comment": "UNÁRIO: sem rightValue"
+            },
+            {
+              "id": "2",
+              "leftValue": "={{ $json.count }}",
+              "rightValue": 0,
+              "operator": {"type": "number", "operation": "gt"},
+              "comment": "BINÁRIO: requer rightValue"
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    }
+  },
+  {
+    "id": "typeversion-format-mismatch",
+    "title": "CRÍTICO: typeVersion e formato de params DEVEM ser compatíveis",
+    "description": "Cada node no n8n usa formatos de parâmetros que mudam entre versões. Se você usar params do formato v3 do Set node com typeVersion:1, o n8n trava com 'propertyValues[itemName] is not iterable'. SEMPRE especifique _v (typeVersion) ao criar nodes.",
+    "tags": ["typeversion", "set", "if", "switch", "httpRequest", "critical", "ui-crash"],
+    "nodeTypes": ["n8n-nodes-base.set", "n8n-nodes-base.if", "n8n-nodes-base.switch", "n8n-nodes-base.httpRequest"],
+    "solution": "Sempre inclua _v nas specs dos nodes ao chamar create_workflow. O MCP usa defaults inteligentes quando _v é omitido, mas inclui explicitamente para garantir.",
+    "versionsReference": {
+      "n8n-nodes-base.set": {"v1": "values.string[]/number[]/boolean[]", "v3": "mode+assignments.assignments[]", "recommended": 3},
+      "n8n-nodes-base.if": {"v1": "conditions.string[]/boolean[]", "v2": "conditions.conditions[]+combinator", "recommended": 2},
+      "n8n-nodes-base.switch": {"v1": "dataType+value+rules[]", "v3": "mode+rules.rules[]", "recommended": 3},
+      "n8n-nodes-base.httpRequest": {"v1": "url+body básico", "v4": "sendHeaders+headerParameters+sendBody+bodyParameters", "recommended": 4},
+      "n8n-nodes-base.webhook": {"v1": "básico", "v2": "responseMode+httpMethod ALL", "recommended": 2}
+    }
+  }
+]

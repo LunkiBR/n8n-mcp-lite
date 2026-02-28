@@ -1,0 +1,293 @@
+{
+  "evolution-api": {
+    "name": "Evolution API v2",
+    "description": "Evolution API é um wrapper open-source para WhatsApp Web (Baileys). Webhook envia eventos para URL configurada.",
+    "docsUrl": "https://doc.evolution-api.com",
+    "webhookSetup": "Configure em: POST /webhook/set/{instance} com url e events desejados (messages.upsert, connection.update, etc.)",
+    "events": {
+      "messages.upsert": {
+        "description": "Nova mensagem recebida ou enviada",
+        "schema": {
+          "event": "messages.upsert",
+          "instance": "my-instance",
+          "data": {
+            "key": {
+              "remoteJid": "5511999999999@s.whatsapp.net",
+              "fromMe": false,
+              "id": "ABCDEF1234567890"
+            },
+            "pushName": "João Silva",
+            "message": {
+              "conversation": "Olá, preciso de ajuda"
+            },
+            "messageType": "conversation",
+            "messageTimestamp": 1700000000,
+            "status": "DELIVERY_ACK"
+          }
+        },
+        "expressions": {
+          "senderPhone": "={{ $json.data.key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '') }}",
+          "senderPhoneWithDDI": "={{ $json.data.key.remoteJid.split('@')[0] }}",
+          "isGroup": "={{ $json.data.key.remoteJid.includes('@g.us') }}",
+          "isFromMe": "={{ $json.data.key.fromMe }}",
+          "messageText": "={{ $json.data.message.conversation ?? $json.data.message.extendedTextMessage?.text ?? $json.data.message.imageMessage?.caption ?? '' }}",
+          "messageType": "={{ $json.data.messageType }}",
+          "messageId": "={{ $json.data.key.id }}",
+          "senderName": "={{ $json.data.pushName ?? '' }}",
+          "timestamp": "={{ $json.data.messageTimestamp }}"
+        },
+        "filterForValidIncomingMessage": "={{ $json.event === 'messages.upsert' && !$json.data.key.fromMe && !$json.data.key.remoteJid.includes('@g.us') }}"
+      },
+      "connection.update": {
+        "description": "Status de conexão da instância mudou",
+        "schema": {
+          "event": "connection.update",
+          "instance": "my-instance",
+          "data": {
+            "state": "open",
+            "statusReason": 200
+          }
+        },
+        "expressions": {
+          "connectionState": "={{ $json.data.state }}",
+          "isConnected": "={{ $json.data.state === 'open' }}"
+        }
+      }
+    },
+    "sendMessage": {
+      "text": {
+        "endpoint": "POST /message/sendText/{instanceName}",
+        "body": {
+          "number": "5511999999999",
+          "text": "Sua mensagem aqui"
+        },
+        "headers": {
+          "apikey": "SUA_API_KEY",
+          "Content-Type": "application/json"
+        }
+      },
+      "image": {
+        "endpoint": "POST /message/sendMedia/{instanceName}",
+        "body": {
+          "number": "5511999999999",
+          "mediatype": "image",
+          "media": "https://url-da-imagem.com/foto.jpg",
+          "caption": "Legenda opcional"
+        }
+      },
+      "buttons": {
+        "endpoint": "POST /message/sendButtons/{instanceName}",
+        "body": {
+          "number": "5511999999999",
+          "title": "Título do menu",
+          "description": "Descrição",
+          "footer": "Rodapé",
+          "buttons": [
+            {"type": "reply", "displayText": "Opção 1", "id": "btn_1"},
+            {"type": "reply", "displayText": "Opção 2", "id": "btn_2"}
+          ]
+        }
+      }
+    },
+    "environmentVariables": {
+      "EVOLUTION_API_URL": "URL base da API (ex: https://evolution.meuserver.com)",
+      "EVOLUTION_API_KEY": "API Key global ou da instância",
+      "EVOLUTION_INSTANCE": "Nome da instância WhatsApp"
+    }
+  },
+
+  "whatsapp-meta-cloud": {
+    "name": "Meta WhatsApp Business Cloud API",
+    "description": "API oficial do WhatsApp Business da Meta. Requer conta Meta Business, número aprovado e App na Meta for Developers.",
+    "docsUrl": "https://developers.facebook.com/docs/whatsapp/cloud-api",
+    "webhookSetup": "Configure em Meta for Developers > App > WhatsApp > Configuração. Verificação GET deve ser respondida com hub.challenge.",
+    "webhookVerification": {
+      "description": "Meta envia GET para verificar o webhook antes de registrar",
+      "method": "GET",
+      "queryParams": {
+        "hub.mode": "subscribe",
+        "hub.verify_token": "SEU_TOKEN_DE_VERIFICACAO",
+        "hub.challenge": "STRING_ALEATORIA_PARA_ECOAR"
+      },
+      "requiredResponse": "Responder com o valor de hub.challenge como texto puro (status 200)",
+      "expression": "={{ $json.query['hub.challenge'] }}"
+    },
+    "events": {
+      "messages": {
+        "description": "Mensagem recebida de um usuário",
+        "schema": {
+          "object": "whatsapp_business_account",
+          "entry": [{
+            "id": "WABA_ID",
+            "changes": [{
+              "value": {
+                "messaging_product": "whatsapp",
+                "metadata": {
+                  "display_phone_number": "551199999999",
+                  "phone_number_id": "PHONE_NUMBER_ID"
+                },
+                "contacts": [{"profile": {"name": "João"}, "wa_id": "5511999999999"}],
+                "messages": [{
+                  "from": "5511999999999",
+                  "id": "wamid.XXXXXX",
+                  "timestamp": "1700000000",
+                  "type": "text",
+                  "text": {"body": "Olá, preciso de ajuda"}
+                }]
+              },
+              "field": "messages"
+            }]
+          }]
+        },
+        "expressions": {
+          "senderPhone": "={{ $json.entry[0].changes[0].value.messages[0].from }}",
+          "senderName": "={{ $json.entry[0].changes[0].value.contacts[0].profile.name }}",
+          "messageText": "={{ $json.entry[0].changes[0].value.messages[0].text.body }}",
+          "messageType": "={{ $json.entry[0].changes[0].value.messages[0].type }}",
+          "messageId": "={{ $json.entry[0].changes[0].value.messages[0].id }}",
+          "timestamp": "={{ $json.entry[0].changes[0].value.messages[0].timestamp }}",
+          "phoneNumberId": "={{ $json.entry[0].changes[0].value.metadata.phone_number_id }}"
+        },
+        "filterForValidMessage": "={{ $json.entry?.[0]?.changes?.[0]?.value?.messages !== undefined && $json.entry[0].changes[0].value.messages[0].type === 'text' }}"
+      }
+    },
+    "sendMessage": {
+      "text": {
+        "endpoint": "POST https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages",
+        "headers": {
+          "Authorization": "Bearer ACCESS_TOKEN",
+          "Content-Type": "application/json"
+        },
+        "body": {
+          "messaging_product": "whatsapp",
+          "to": "5511999999999",
+          "type": "text",
+          "text": {"body": "Sua mensagem aqui"}
+        }
+      },
+      "template": {
+        "endpoint": "POST https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages",
+        "body": {
+          "messaging_product": "whatsapp",
+          "to": "5511999999999",
+          "type": "template",
+          "template": {
+            "name": "hello_world",
+            "language": {"code": "pt_BR"}
+          }
+        }
+      }
+    },
+    "environmentVariables": {
+      "META_ACCESS_TOKEN": "Token de acesso permanente (System User Token)",
+      "META_PHONE_NUMBER_ID": "ID do número de telefone no Meta",
+      "META_WABA_ID": "ID da conta WhatsApp Business",
+      "META_VERIFY_TOKEN": "Token de verificação do webhook (você define)"
+    }
+  },
+
+  "z-api": {
+    "name": "Z-API",
+    "description": "API brasileira para WhatsApp (não oficial, wrapper Baileys). Similar à Evolution API com endpoint REST.",
+    "docsUrl": "https://developer.z-api.io",
+    "events": {
+      "ReceivedMessage": {
+        "description": "Mensagem de texto recebida",
+        "schema": {
+          "isStatusReply": false,
+          "chatLid": null,
+          "connectedPhone": "5511999999999",
+          "waitingMessage": false,
+          "isEdit": false,
+          "isGroup": false,
+          "isNewsletter": false,
+          "instanceId": "INSTANCE_ID",
+          "messageId": "MSG_ID",
+          "phone": "5511999999999",
+          "fromMe": false,
+          "momment": 1700000000000,
+          "status": "RECEIVED",
+          "chatName": "João Silva",
+          "senderPhoto": "https://url-foto.com/photo.jpg",
+          "senderName": "João Silva",
+          "participantPhone": null,
+          "photo": "https://url-foto.com/photo.jpg",
+          "broadcast": false,
+          "type": "ReceivedMessage",
+          "text": {"message": "Olá, preciso de ajuda"}
+        },
+        "expressions": {
+          "senderPhone": "={{ $json.phone }}",
+          "senderName": "={{ $json.senderName }}",
+          "messageText": "={{ $json.text.message }}",
+          "messageId": "={{ $json.messageId }}",
+          "isGroup": "={{ $json.isGroup }}",
+          "isFromMe": "={{ $json.fromMe }}"
+        },
+        "filterForValidMessage": "={{ $json.type === 'ReceivedMessage' && !$json.fromMe && !$json.isGroup }}"
+      }
+    },
+    "sendMessage": {
+      "text": {
+        "endpoint": "POST https://api.z-api.io/instances/{instanceId}/token/{instanceToken}/send-text",
+        "body": {
+          "phone": "5511999999999",
+          "message": "Sua mensagem aqui"
+        }
+      }
+    },
+    "environmentVariables": {
+      "ZAPI_INSTANCE_ID": "ID da instância Z-API",
+      "ZAPI_TOKEN": "Token da instância",
+      "ZAPI_CLIENT_TOKEN": "Client Token (para segurança adicional)"
+    }
+  },
+
+  "telegram": {
+    "name": "Telegram Bot API",
+    "description": "API oficial do Telegram para bots. Muito mais simples que WhatsApp — sem necessidade de número real.",
+    "docsUrl": "https://core.telegram.org/bots/api",
+    "webhookSetup": "Use o Telegram Trigger node do n8n (gerencia webhook automaticamente) OU configure manualmente via setWebhook API.",
+    "events": {
+      "message": {
+        "description": "Mensagem recebida de um usuário",
+        "schema": {
+          "update_id": 123456789,
+          "message": {
+            "message_id": 1,
+            "from": {
+              "id": 123456789,
+              "first_name": "João",
+              "last_name": "Silva",
+              "username": "joaosilva"
+            },
+            "chat": {"id": 123456789, "type": "private"},
+            "date": 1700000000,
+            "text": "Olá, preciso de ajuda"
+          }
+        },
+        "expressions": {
+          "senderId": "={{ $json.message.from.id }}",
+          "senderName": "={{ $json.message.from.first_name }}",
+          "chatId": "={{ $json.message.chat.id }}",
+          "messageText": "={{ $json.message.text }}",
+          "messageId": "={{ $json.message.message_id }}",
+          "isPrivate": "={{ $json.message.chat.type === 'private' }}"
+        }
+      }
+    },
+    "sendMessage": {
+      "text": {
+        "endpoint": "POST https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+        "body": {
+          "chat_id": 123456789,
+          "text": "Sua mensagem aqui",
+          "parse_mode": "Markdown"
+        }
+      }
+    },
+    "environmentVariables": {
+      "TELEGRAM_BOT_TOKEN": "Token do bot (obtido via @BotFather)"
+    }
+  }
+}

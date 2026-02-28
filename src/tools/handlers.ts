@@ -23,12 +23,15 @@ import {
   buildFocusedView,
   discoverFocusArea,
   discoverRange,
+  extractExecutionRunData,
 } from "../transform/focus.js";
+import type { ExecutionRunDataMap } from "../types.js";
 import {
   buildAdjacency,
   bfsForward,
   bfsBackward,
 } from "../transform/graph.js";
+import { autoLayout } from "../transform/layout.js";
 import { validateArgs } from "../validate.js";
 import { TOOL_SCHEMAS } from "./definitions.js";
 import { nodeDb } from "../knowledge/node-db.js";
@@ -36,6 +39,7 @@ import { NODE_FLAGS } from "../knowledge/types.js";
 import { VersionStore } from "../versioning/version-store.js";
 import { runPreflight, buildVirtualState } from "../security/preflight.js";
 import type { PreflightResult } from "../security/types.js";
+import { knowledgeDb } from "../knowledge/pattern-db.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -106,6 +110,21 @@ export class ToolHandlers {
           return await this.listVersions(args);
         case "rollback_workflow":
           return await this.rollbackWorkflow(args);
+        // ---- Knowledge base ----
+        case "search_patterns":
+          return this.searchPatterns(args);
+        case "get_pattern":
+          return this.getPattern(args);
+        case "get_payload_schema":
+          return this.getPayloadSchema(args);
+        case "get_n8n_knowledge":
+          return this.getN8nKnowledge(args);
+        case "list_providers":
+          return this.listProviders();
+        case "search_expressions":
+          return this.searchExpressions(args);
+        case "test_node":
+          return await this.testNode(args);
         default:
           return err(`Unknown tool: ${name}`);
       }
@@ -368,7 +387,28 @@ export class ToolHandlers {
           if (existing)
             throw new Error(`Node "${nodeSpec.name}" already exists`);
 
-          // Auto-position: find max X and add 200
+          // Smart auto-position: recalculate layout with all nodes + new node
+          let autoPos: [number, number] | undefined;
+          if (!nodeSpec.position) {
+            // Build lite representations to feed the layout engine
+            const allLiteNodes: LiteNode[] = [
+              ...nodes.map((n) => ({
+                name: n.name,
+                type: n.type,
+                _id: n.id,
+              })),
+              {
+                name: nodeSpec.name as string,
+                type: restoreNodeType(nodeSpec.type as string),
+                _id: (nodeSpec._id as string) || crypto.randomUUID(),
+              },
+            ];
+            const allFlow = simplifyConnections(connections);
+            const layoutMap = autoLayout(allLiteNodes, allFlow);
+            autoPos = layoutMap.get(nodeSpec.name as string);
+          }
+
+          // Fallback: simple horizontal stacking
           const maxX = Math.max(...nodes.map((n) => n.position[0]), 50);
 
           const newNode: N8nNodeRaw = {
@@ -376,10 +416,8 @@ export class ToolHandlers {
             name: nodeSpec.name as string,
             type: restoreNodeType(nodeSpec.type as string),
             typeVersion: (nodeSpec._v as number) ?? 1,
-            position: (nodeSpec.position as [number, number]) ?? [
-              maxX + 200,
-              300,
-            ],
+            position: (nodeSpec.position as [number, number]) ??
+              autoPos ?? [maxX + 200, 300],
             parameters: (nodeSpec.params as Record<string, unknown>) ?? {},
           };
 
@@ -699,8 +737,10 @@ export class ToolHandlers {
     const id = args.id as string;
     if (!id) return err("Missing execution ID");
 
-    const exec = await this.api.getExecution(id);
-    return ok({
+    const includeData = (args.includeData as boolean) ?? false;
+    const exec = await this.api.getExecution(id, includeData);
+
+    const result: Record<string, unknown> = {
       id: exec.id,
       finished: exec.finished,
       status: exec.status,
@@ -708,7 +748,14 @@ export class ToolHandlers {
       startedAt: exec.startedAt,
       stoppedAt: exec.stoppedAt,
       workflowId: exec.workflowId,
-    });
+    };
+
+    // If data requested, extract and return structured node outputs
+    if (includeData && exec.data) {
+      result.nodeData = extractExecutionRunData(exec.data);
+    }
+
+    return ok(result);
   }
 
   // ---- Webhook trigger ----
@@ -817,7 +864,23 @@ export class ToolHandlers {
       );
     }
 
-    const focused = buildFocusedView(raw, focusedNodeNames);
+    // Optionally fetch execution data for inputHint injection
+    let runDataMap: ExecutionRunDataMap | undefined;
+    if (args.executionId) {
+      try {
+        const exec = await this.api.getExecution(
+          args.executionId as string,
+          true
+        );
+        if (exec.data) {
+          runDataMap = extractExecutionRunData(exec.data);
+        }
+      } catch {
+        // Graceful degradation: proceed without inputHint
+      }
+    }
+
+    const focused = buildFocusedView(raw, focusedNodeNames, runDataMap);
     return ok(focused);
   }
 
@@ -954,6 +1017,18 @@ export class ToolHandlers {
         ...(p.opts ? { options: p.opts.map((o) => `${o.v} (${o.l})`) } : {}),
         ...(p.show ? { showWhen: p.show } : {}),
       }));
+
+      // Generate example config from required + default properties
+      const example: Record<string, unknown> = {};
+      for (const p of node.props) {
+        if (p.req && !p.show) {
+          // Required property without conditional visibility: always include
+          example[p.n] = p.def ?? (p.opts?.[0]?.v ?? `<${p.t}>`);
+        }
+      }
+      if (Object.keys(example).length > 0) {
+        result.exampleConfig = example;
+      }
     }
 
     if (detail === "full" && node.props) {
@@ -1048,5 +1123,326 @@ export class ToolHandlers {
       },
       message: "Workflow restored successfully. A safety snapshot of the previous state was created.",
     });
+  }
+
+  // ============================================================
+  // Pilar 3: Knowledge Base handlers
+  // ============================================================
+
+  // ---- Search patterns ----
+  private searchPatterns(args: Record<string, unknown>): ToolResult {
+    const query = (args.query as string) ?? "";
+    const tags = args.tags as string[] | undefined;
+
+    const results = knowledgeDb.searchPatterns(query, tags);
+
+    if (results.length === 0) {
+      return ok({
+        patterns: [],
+        count: 0,
+        message: `No patterns found for "${query}". Try broader terms like "whatsapp", "ai agent", "webhook", or use search_patterns with query="" to see all.`,
+      });
+    }
+
+    // Return metadata only (no nodes/flow to save tokens)
+    return ok({
+      patterns: results.map(({ nodes, flow, ...meta }) => meta),
+      count: results.length,
+      tip: 'Use get_pattern with the pattern "id" to get the full nodes[] and flow[] ready for create_workflow.',
+    });
+  }
+
+  // ---- Get pattern ----
+  private getPattern(args: Record<string, unknown>): ToolResult {
+    const id = args.id as string;
+    if (!id) return err("Missing pattern id");
+
+    const pattern = knowledgeDb.getPattern(id);
+    if (!pattern) {
+      return err(
+        `Pattern "${id}" not found. Use search_patterns to find available patterns.`
+      );
+    }
+
+    return ok({
+      ...pattern,
+      usage: {
+        CRITICAL_WARNING: "NEVER reconstruct nodes from scratch. Copy the nodes[] array from this response exactly, only editing params values. The _v (typeVersion), _id, and type fields MUST be preserved — omitting _v causes UI crashes ('propertyValues[itemName] is not iterable').",
+        step1: "Review requiredParams and ask the user for each value before building",
+        step2: "Customize only nodes[].params values (system prompts, URLs, paths, etc.) — keep _v, _id, type untouched",
+        step3: "Call create_workflow with name, this nodes[] and this flow[] (after param customization)",
+        step4: "Set environment variables on n8n server for every requiredParam where envVar=true",
+      },
+    });
+  }
+
+  // ---- Get payload schema ----
+  private getPayloadSchema(args: Record<string, unknown>): ToolResult {
+    const provider = args.provider as string;
+    if (!provider) return err("Missing provider. Use list_providers to see options.");
+
+    const payload = knowledgeDb.getPayload(provider);
+    if (!payload) {
+      const available = knowledgeDb.listProviders().map((p) => p.id);
+      return err(
+        `Provider "${provider}" not found. Available: ${available.join(", ")}`
+      );
+    }
+
+    const eventFilter = args.event as string | undefined;
+
+    // Filter to specific event if requested
+    let events = payload.events;
+    if (eventFilter) {
+      const filtered: typeof events = {};
+      for (const [key, val] of Object.entries(events)) {
+        if (key.toLowerCase().includes(eventFilter.toLowerCase())) {
+          filtered[key] = val;
+        }
+      }
+      events = Object.keys(filtered).length > 0 ? filtered : payload.events;
+    }
+
+    return ok({
+      provider: provider,
+      name: payload.name,
+      description: payload.description,
+      docsUrl: payload.docsUrl,
+      webhookSetup: payload.webhookSetup,
+      webhookVerification: payload.webhookVerification,
+      events,
+      sendMessage: payload.sendMessage,
+      environmentVariables: payload.environmentVariables,
+    });
+  }
+
+  // ---- Get n8n knowledge (gotchas) ----
+  private getN8nKnowledge(args: Record<string, unknown>): ToolResult {
+    const query = args.query as string | undefined;
+    const nodeType = args.nodeType as string | undefined;
+
+    if (!query && !nodeType) {
+      // Return all gotchas summarized
+      const all = knowledgeDb.getAllGotchas();
+      return ok({
+        gotchas: all.map((g) => ({
+          id: g.id,
+          title: g.title,
+          tags: g.tags,
+          nodeTypes: g.nodeTypes,
+        })),
+        count: all.length,
+        tip: "Pass a query or nodeType to filter and get full details with solutions.",
+      });
+    }
+
+    const results = knowledgeDb.searchGotchas(query, nodeType);
+
+    if (results.length === 0) {
+      return ok({
+        gotchas: [],
+        count: 0,
+        message: `No gotchas found for query="${query ?? ""}" nodeType="${nodeType ?? ""}". Try broader terms.`,
+      });
+    }
+
+    return ok({
+      gotchas: results,
+      count: results.length,
+    });
+  }
+
+  // ---- List providers ----
+  private listProviders(): ToolResult {
+    const providers = knowledgeDb.listProviders();
+    return ok({
+      providers,
+      count: providers.length,
+      tip: 'Use get_payload_schema with a provider "id" to get the full payload schema and extraction expressions.',
+    });
+  }
+
+  // ---- Search expressions ----
+  private searchExpressions(args: Record<string, unknown>): ToolResult {
+    const query = args.query as string | undefined;
+    const category = args.category as string | undefined;
+
+    if (!query && !category) {
+      // Return category list only
+      const all = knowledgeDb.getAllExpressions();
+      return ok({
+        categories: all.map((c) => ({
+          id: c.id,
+          title: c.title,
+          description: c.description,
+          entryCount: c.entries.length,
+        })),
+        tip: "Pass a query to search expressions, or a category ID to see all expressions in that category.",
+      });
+    }
+
+    const results = knowledgeDb.searchExpressions(query, category);
+
+    if (results.length === 0) {
+      return ok({
+        categories: [],
+        count: 0,
+        message: 'No expressions found. Try: "whatsapp phone", "cross branch", "ai agent output", "null default".',
+      });
+    }
+
+    return ok({
+      categories: results,
+      totalExpressions: results.reduce((sum, c) => sum + c.entries.length, 0),
+    });
+  }
+
+  // ============================================================
+  // Dry-Run: Test Node
+  // ============================================================
+
+  private async testNode(args: Record<string, unknown>): Promise<ToolResult> {
+    const nodeSpec = args.node as Record<string, unknown>;
+    if (!nodeSpec?.name || !nodeSpec?.type) {
+      return err("test_node requires node.name and node.type");
+    }
+
+    const mockInput = (args.mockInput as Record<string, unknown>) ?? {};
+    const timeout = Math.min((args.timeout as number) ?? 15000, 60000);
+    const startTime = Date.now();
+
+    // Reject trigger nodes — they can't be tested this way
+    const nodeType = (nodeSpec.type as string).toLowerCase();
+    if (
+      nodeType.includes("trigger") ||
+      nodeType.includes("webhook") ||
+      nodeType.includes("schedule") ||
+      nodeType.includes("cron")
+    ) {
+      return err(
+        "Cannot test trigger nodes. test_node is for data processing nodes (Code, Set, IF, HTTP Request, etc.)."
+      );
+    }
+
+    // Build temporary workflow: Webhook → Target Node
+    const ts = Date.now();
+    const testWorkflowName = `__mcp_test_${ts}`;
+    const webhookPath = `mcp-test-${ts}`;
+
+    const webhookId = crypto.randomUUID();
+    const targetId = crypto.randomUUID();
+    const targetName = nodeSpec.name as string;
+
+    const fullType = restoreNodeType(nodeSpec.type as string);
+
+    // Build credentials object if provided
+    let credentials: Record<string, { id: string; name: string }> | undefined;
+    if (nodeSpec.creds && typeof nodeSpec.creds === "object") {
+      credentials = {};
+      for (const [k, v] of Object.entries(
+        nodeSpec.creds as Record<string, string>
+      )) {
+        credentials[k] = { id: "", name: v };
+      }
+    }
+
+    const tempWorkflow = {
+      name: testWorkflowName,
+      nodes: [
+        {
+          id: webhookId,
+          name: "Test Webhook",
+          type: "n8n-nodes-base.webhook",
+          typeVersion: 2,
+          position: [250, 300] as [number, number],
+          parameters: {
+            path: webhookPath,
+            httpMethod: "POST",
+            responseMode: "lastNode",
+          },
+        },
+        {
+          id: targetId,
+          name: targetName,
+          type: fullType,
+          typeVersion: (nodeSpec._v as number) ?? 1,
+          position: [500, 300] as [number, number],
+          parameters:
+            (nodeSpec.params as Record<string, unknown>) ?? {},
+          ...(credentials ? { credentials } : {}),
+        },
+      ],
+      connections: {
+        "Test Webhook": {
+          main: [
+            [{ node: targetName, type: "main", index: 0 }],
+          ],
+        },
+      },
+      settings: { executionOrder: "v1" },
+    };
+
+    let createdId: string | undefined;
+
+    try {
+      // 1. Create temporary workflow
+      const created = await this.api.createWorkflow(tempWorkflow);
+      createdId = created.id;
+
+      // 2. Activate it
+      await this.api.activateWorkflow(createdId);
+
+      // 3. Wait for activation to propagate, then trigger with retry
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      // 4. Trigger webhook with mock data (retry once on 404 — activation race)
+      let output: unknown;
+      const triggerAttempt = async () =>
+        this.api.triggerWebhook(webhookPath, "POST", mockInput);
+
+      output = await triggerAttempt();
+
+      // If we got a 404-style response, retry after extra wait
+      if (
+        output &&
+        typeof output === "object" &&
+        (output as Record<string, unknown>).status === 404
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        output = await triggerAttempt();
+      }
+
+      const durationMs = Date.now() - startTime;
+
+      return ok({
+        success: true,
+        output,
+        durationMs,
+        note: "Temporary test workflow was created and deleted automatically.",
+      });
+    } catch (e) {
+      const durationMs = Date.now() - startTime;
+      const errorMsg = e instanceof Error ? e.message : String(e);
+
+      return ok({
+        success: false,
+        error: errorMsg,
+        durationMs,
+      });
+    } finally {
+      // 5. Always clean up
+      if (createdId) {
+        try {
+          await this.api.deactivateWorkflow(createdId);
+        } catch {
+          /* ignore */
+        }
+        try {
+          await this.api.deleteWorkflow(createdId);
+        } catch {
+          /* ignore */
+        }
+      }
+    }
   }
 }

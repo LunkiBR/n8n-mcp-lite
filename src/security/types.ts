@@ -26,7 +26,10 @@ export interface ValidationWarning {
     | "security"
     | "best_practice"
     | "missing_common"
-    | "expression_hint";
+    | "expression_hint"
+    | "unknown_node_warning"
+    | "property_location_hint"
+    | "type_mismatch";
   property?: string;
   node?: string;
   message: string;

@@ -10,9 +10,37 @@ import type {
   LiteNode,
   LiteConnection,
 } from "../types.js";
+import { autoLayout } from "./layout.js";
 
 const NODE_PREFIX = "n8n-nodes-base.";
 const LANGCHAIN_PREFIX = "@n8n/n8n-nodes-langchain.";
+
+/**
+ * Minimum stable typeVersions for nodes that have multi-version formats.
+ * Used as fallback when _v is not specified to avoid format/version mismatch
+ * (e.g. Set node v3 params sent with typeVersion 1 → "not iterable" UI crash).
+ * Always prefer _v from the node spec; this is only the last-resort default.
+ */
+const DEFAULT_TYPE_VERSIONS: Record<string, number> = {
+  "n8n-nodes-base.set": 3,
+  "n8n-nodes-base.if": 2,
+  "n8n-nodes-base.switch": 3,
+  "n8n-nodes-base.httpRequest": 4,
+  "n8n-nodes-base.webhook": 2,
+  "n8n-nodes-base.respondToWebhook": 1,
+  "n8n-nodes-base.scheduleTrigger": 1,
+  "n8n-nodes-base.merge": 3,
+  "n8n-nodes-base.code": 2,
+  "n8n-nodes-base.splitInBatches": 3,
+  "n8n-nodes-base.postgres": 2,
+  "n8n-nodes-base.mySql": 2,
+  "@n8n/n8n-nodes-langchain.agent": 1,
+  "@n8n/n8n-nodes-langchain.lmChatOpenAi": 1,
+  "@n8n/n8n-nodes-langchain.memoryBufferWindow": 1,
+  "@n8n/n8n-nodes-langchain.chainLlm": 1,
+  "@n8n/n8n-nodes-langchain.toolCalculator": 1,
+  "@n8n/n8n-nodes-langchain.vectorStoreInMemory": 1,
+};
 
 // Default values that can be stripped
 const DEFAULT_EMPTY_VALUES = [null, undefined, "", "none", "off"];
@@ -330,6 +358,11 @@ export function reconstructWorkflow(
     }
   }
 
+  // Auto-layout for new workflows (when no original positions exist)
+  const layoutPositions = originalRaw
+    ? new Map<string, [number, number]>() // Update: prefer original positions
+    : autoLayout(lite.nodes, lite.flow); // Create: smart auto-layout
+
   // Reconstruct nodes
   const nodes: N8nNodeRaw[] = lite.nodes.map((liteNode, index) => {
     const original = originalNodeMap.get(liteNode.name);
@@ -339,9 +372,10 @@ export function reconstructWorkflow(
       id: liteNode._id || original?.id || crypto.randomUUID(),
       name: liteNode.name,
       type: fullType,
-      typeVersion: liteNode._v ?? original?.typeVersion ?? 1,
+      typeVersion: liteNode._v ?? original?.typeVersion ?? DEFAULT_TYPE_VERSIONS[fullType] ?? 1,
       position: original?.position ??
-        originalPositions.get(liteNode.name) ?? [
+        originalPositions.get(liteNode.name) ??
+        layoutPositions.get(liteNode.name) ?? [
           250 + index * 200,
           300,
         ],
@@ -401,11 +435,8 @@ export function reconstructWorkflow(
     name: lite.name,
     nodes,
     connections,
+    settings: lite.settings ?? { executionOrder: "v1" },
   };
-
-  if (lite.settings) {
-    result.settings = lite.settings;
-  }
 
   return result;
 }

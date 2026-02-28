@@ -1,0 +1,319 @@
+{
+  "categories": [
+    {
+      "id": "cross-branch",
+      "title": "Referência entre branches (após IF/Switch)",
+      "description": "Como acessar dados de nodes em outros branches ou antes de um IF/Switch",
+      "entries": [
+        {
+          "useCase": "Acessar campo de node em outro branch",
+          "expression": "={{ $('NomeDoNode').first().json.campo }}",
+          "example": "={{ $('Extract Message').first().json.senderPhone }}"
+        },
+        {
+          "useCase": "Pegar o último item de um node",
+          "expression": "={{ $('NomeDoNode').last().json.campo }}",
+          "example": "={{ $('AI Agent').last().json.output }}"
+        },
+        {
+          "useCase": "Acessar item específico por índice",
+          "expression": "={{ $('NomeDoNode').item(0).json.campo }}",
+          "example": "={{ $('Set Variables').item(0).json.userId }}"
+        },
+        {
+          "useCase": "Verificar se node tem output",
+          "expression": "={{ $('NomeDoNode').all().length > 0 }}",
+          "example": "={{ $('Database Query').all().length > 0 }}"
+        }
+      ]
+    },
+    {
+      "id": "string-manipulation",
+      "title": "Manipulação de strings",
+      "entries": [
+        {
+          "useCase": "Extrair número de phone WhatsApp (remover @s.whatsapp.net)",
+          "expression": "={{ $json.data.key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '') }}"
+        },
+        {
+          "useCase": "Verificar se JID é grupo",
+          "expression": "={{ $json.data.key.remoteJid.includes('@g.us') }}"
+        },
+        {
+          "useCase": "Converter para maiúsculas",
+          "expression": "={{ $json.text.toUpperCase() }}"
+        },
+        {
+          "useCase": "Remover espaços extras e minúsculas (normalizar input)",
+          "expression": "={{ $json.text.trim().toLowerCase() }}"
+        },
+        {
+          "useCase": "Substring (primeiros N chars)",
+          "expression": "={{ $json.text.substring(0, 100) }}"
+        },
+        {
+          "useCase": "Substituir múltiplos valores",
+          "expression": "={{ $json.phone.replace(/[^0-9]/g, '') }}"
+        },
+        {
+          "useCase": "Verificar se string começa com",
+          "expression": "={{ $json.text.startsWith('https://') }}"
+        },
+        {
+          "useCase": "Split e pegar primeira parte",
+          "expression": "={{ $json.email.split('@')[0] }}"
+        },
+        {
+          "useCase": "Template literal com expressão",
+          "expression": "=Olá {{ $json.name }}, seu pedido #{{ $json.orderId }} foi aprovado!"
+        }
+      ]
+    },
+    {
+      "id": "null-handling",
+      "title": "Tratamento de null/undefined",
+      "entries": [
+        {
+          "useCase": "Valor padrão se null/undefined (nullish coalescing)",
+          "expression": "={{ $json.field ?? 'valor padrão' }}"
+        },
+        {
+          "useCase": "Acesso seguro a objeto aninhado (optional chaining)",
+          "expression": "={{ $json.data?.message?.conversation ?? '' }}"
+        },
+        {
+          "useCase": "Verificar se campo existe",
+          "expression": "={{ $json.field !== undefined && $json.field !== null }}"
+        },
+        {
+          "useCase": "Mensagem de texto Evolution API (conversation ou extended)",
+          "expression": "={{ $json.data.message.conversation ?? $json.data.message.extendedTextMessage?.text ?? $json.data.message.imageMessage?.caption ?? '' }}"
+        },
+        {
+          "useCase": "Verificar se array tem itens",
+          "expression": "={{ Array.isArray($json.items) && $json.items.length > 0 }}"
+        }
+      ]
+    },
+    {
+      "id": "date-time",
+      "title": "Data e hora",
+      "entries": [
+        {
+          "useCase": "Data/hora atual em ISO 8601",
+          "expression": "={{ new Date().toISOString() }}"
+        },
+        {
+          "useCase": "Timestamp Unix atual",
+          "expression": "={{ Math.floor(Date.now() / 1000) }}"
+        },
+        {
+          "useCase": "Formatar data para brasileiro",
+          "expression": "={{ new Date().toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit', year: 'numeric'}) }}"
+        },
+        {
+          "useCase": "Converter timestamp Unix para data",
+          "expression": "={{ new Date($json.timestamp * 1000).toLocaleDateString('pt-BR') }}"
+        },
+        {
+          "useCase": "Adicionar dias à data atual",
+          "expression": "={{ new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() }}"
+        }
+      ]
+    },
+    {
+      "id": "conditionals",
+      "title": "Condicionais em expressões",
+      "entries": [
+        {
+          "useCase": "Ternário (if/else inline)",
+          "expression": "={{ $json.isVip ? 'Cliente VIP' : 'Cliente Padrão' }}"
+        },
+        {
+          "useCase": "Switch/case com ternários aninhados",
+          "expression": "={{ $json.status === 'active' ? 'Ativo' : $json.status === 'pending' ? 'Pendente' : 'Inativo' }}"
+        },
+        {
+          "useCase": "Condicional com AND",
+          "expression": "={{ $json.age >= 18 && $json.hasAccount === true }}"
+        },
+        {
+          "useCase": "Verificar se valor está em lista",
+          "expression": "={{ ['admin', 'moderator', 'owner'].includes($json.role) }}"
+        }
+      ]
+    },
+    {
+      "id": "json-object",
+      "title": "Objetos e arrays JSON",
+      "entries": [
+        {
+          "useCase": "Serializar objeto para string JSON",
+          "expression": "={{ JSON.stringify($json.data) }}"
+        },
+        {
+          "useCase": "Parse string JSON para objeto",
+          "expression": "={{ JSON.parse($json.jsonString) }}"
+        },
+        {
+          "useCase": "Extrair chaves de objeto",
+          "expression": "={{ Object.keys($json.data) }}"
+        },
+        {
+          "useCase": "Mapear array para extrair campo",
+          "expression": "={{ $json.items.map(item => item.name) }}"
+        },
+        {
+          "useCase": "Filtrar array por condição",
+          "expression": "={{ $json.orders.filter(o => o.status === 'pending') }}"
+        },
+        {
+          "useCase": "Primeiro item de array",
+          "expression": "={{ $json.results[0] ?? null }}"
+        },
+        {
+          "useCase": "Tamanho de array",
+          "expression": "={{ $json.items.length }}"
+        },
+        {
+          "useCase": "Unir arrays de múltiplos items de entrada",
+          "expression": "={{ $input.all().map(item => item.json) }}"
+        }
+      ]
+    },
+    {
+      "id": "env-and-credentials",
+      "title": "Variáveis de ambiente",
+      "entries": [
+        {
+          "useCase": "Acessar variável de ambiente",
+          "expression": "={{ $env.NOME_DA_VARIAVEL }}"
+        },
+        {
+          "useCase": "URL construída com env vars",
+          "expression": "={{ $env.API_BASE_URL }}/users/={{ $json.userId }}"
+        },
+        {
+          "useCase": "Verificar se env var está definida",
+          "expression": "={{ $env.FEATURE_FLAG === 'true' }}"
+        }
+      ]
+    },
+    {
+      "id": "ai-agent-specific",
+      "title": "Expressões específicas para AI Agent",
+      "entries": [
+        {
+          "useCase": "Acessar output do AI Agent",
+          "expression": "={{ $json.output }}"
+        },
+        {
+          "useCase": "Acessar output de outro branch",
+          "expression": "={{ $('AI Agent').first().json.output }}"
+        },
+        {
+          "useCase": "Limitar output para N caracteres (WhatsApp tem limite)",
+          "expression": "={{ $('AI Agent').first().json.output.substring(0, 4096) }}"
+        },
+        {
+          "useCase": "Input para AI Agent vindo de outro node",
+          "expression": "={{ $('Extract Message').first().json.messageText }}"
+        },
+        {
+          "useCase": "Chave de sessão única por telefone",
+          "expression": "={{ $('Extract Message').first().json.senderPhone }}"
+        }
+      ]
+    },
+    {
+      "id": "whatsapp-specific",
+      "title": "Expressões específicas para WhatsApp (Evolution API)",
+      "entries": [
+        {
+          "useCase": "Extrair número limpo do remoteJid",
+          "expression": "={{ $json.data.key.remoteJid.replace('@s.whatsapp.net', '').replace('@g.us', '') }}"
+        },
+        {
+          "useCase": "Texto da mensagem (conversation ou extended)",
+          "expression": "={{ $json.data.message.conversation ?? $json.data.message.extendedTextMessage?.text ?? '' }}"
+        },
+        {
+          "useCase": "Verificar se é mensagem própria (envio do bot)",
+          "expression": "={{ $json.data.key.fromMe === true }}"
+        },
+        {
+          "useCase": "Verificar se é grupo",
+          "expression": "={{ $json.data.key.remoteJid.endsWith('@g.us') }}"
+        },
+        {
+          "useCase": "Nome do remetente",
+          "expression": "={{ $json.data.pushName ?? 'Usuário' }}"
+        },
+        {
+          "useCase": "Tipo da mensagem",
+          "expression": "={{ $json.data.messageType }}"
+        },
+        {
+          "useCase": "ID único da mensagem",
+          "expression": "={{ $json.data.key.id }}"
+        }
+      ]
+    },
+    {
+      "id": "whatsapp-meta",
+      "title": "Expressões específicas para WhatsApp (Meta Cloud API)",
+      "entries": [
+        {
+          "useCase": "Número do remetente",
+          "expression": "={{ $json.entry[0].changes[0].value.messages[0].from }}"
+        },
+        {
+          "useCase": "Texto da mensagem",
+          "expression": "={{ $json.entry[0].changes[0].value.messages[0].text.body }}"
+        },
+        {
+          "useCase": "Verificar se payload tem mensagem (não é notificação vazia)",
+          "expression": "={{ $json.entry?.[0]?.changes?.[0]?.value?.messages !== undefined }}"
+        },
+        {
+          "useCase": "Nome do remetente",
+          "expression": "={{ $json.entry[0].changes[0].value.contacts[0].profile.name }}"
+        },
+        {
+          "useCase": "Phone Number ID (para enviar resposta)",
+          "expression": "={{ $json.entry[0].changes[0].value.metadata.phone_number_id }}"
+        },
+        {
+          "useCase": "Challenge de verificação",
+          "expression": "={{ $json.query['hub.challenge'] }}"
+        },
+        {
+          "useCase": "Verificar se é requisição GET de verificação",
+          "expression": "={{ $json.query['hub.mode'] === 'subscribe' }}"
+        }
+      ]
+    },
+    {
+      "id": "number-math",
+      "title": "Números e matemática",
+      "entries": [
+        {
+          "useCase": "Arredondar para 2 casas decimais",
+          "expression": "={{ Math.round($json.price * 100) / 100 }}"
+        },
+        {
+          "useCase": "Número aleatório entre 0 e 1",
+          "expression": "={{ Math.random() }}"
+        },
+        {
+          "useCase": "Converter string para número",
+          "expression": "={{ parseInt($json.countStr) }}"
+        },
+        {
+          "useCase": "Calcular porcentagem",
+          "expression": "={{ ($json.completed / $json.total * 100).toFixed(1) }}%"
+        }
+      ]
+    }
+  ]
+}

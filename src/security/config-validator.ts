@@ -22,13 +22,15 @@ export function validateNodeConfig(
   // 1. Check node type exists in knowledge DB (getNode handles prefix resolution)
   const nodeSchema = nodeDb.getNode(type);
   if (!nodeSchema) {
-    errors.push({
-      type: "unknown_node",
+    // Custom/community/newer nodes: WARNING only, don't block
+    // The n8n API will reject truly invalid types anyway
+    warnings.push({
+      type: "unknown_node_warning",
       node: name,
-      message: `Unknown node type "${type}". This may cause the workflow to fail. Use search_nodes to find valid node types.`,
-      fix: `Use search_nodes with a keyword from "${type}" to find the correct node type.`,
+      message: `Node type "${type}" not in knowledge DB (may be custom/community/newer). Schema validation skipped.`,
+      suggestion: "Verify this node type exists in your n8n instance. Use search_nodes to find standard nodes.",
     });
-    return { errors, warnings }; // Can't validate further without schema
+    return { errors, warnings }; // Can't validate further without schema, but don't block
   }
   // 2. Validate required properties
   if (nodeSchema.props) {
@@ -143,6 +145,73 @@ export function validateNodeConfig(
   // Code nodes: basic checks
   if (nodeType.includes("code") || nodeType.includes("function")) {
     validateCodeNode(name, parameters, warnings);
+  }
+
+  // 6. Type validation: check param types against schema
+  if (nodeSchema.props) {
+    for (const prop of nodeSchema.props) {
+      const value = parameters[prop.n];
+      if (value === undefined || value === null) continue;
+      // Skip expression values (resolved at runtime)
+      if (typeof value === "string" && value.startsWith("=")) continue;
+
+      const expectedType = prop.t; // "string", "number", "boolean", "options", etc.
+      const actualType = typeof value;
+
+      if (
+        (expectedType === "string" || expectedType === "options") &&
+        actualType !== "string" &&
+        actualType !== "object" // collections/fixedCollections are objects
+      ) {
+        warnings.push({
+          type: "type_mismatch",
+          node: name,
+          property: prop.n,
+          message: `"${prop.dn || prop.n}" expects a string but got ${actualType}.`,
+          suggestion: `Convert the value to a string.`,
+        });
+      } else if (expectedType === "number" && actualType !== "number") {
+        warnings.push({
+          type: "type_mismatch",
+          node: name,
+          property: prop.n,
+          message: `"${prop.dn || prop.n}" expects a number but got ${actualType}.`,
+          suggestion: `Provide a numeric value.`,
+        });
+      } else if (expectedType === "boolean" && actualType !== "boolean") {
+        warnings.push({
+          type: "type_mismatch",
+          node: name,
+          property: prop.n,
+          message: `"${prop.dn || prop.n}" expects a boolean but got ${actualType}.`,
+          suggestion: `Use true or false.`,
+        });
+      }
+    }
+  }
+
+  // 7. Property location hints: detect misplaced params
+  if (nodeSchema.props) {
+    const topLevelNames = new Set(nodeSchema.props.map((p) => p.n));
+    const hasOptions = topLevelNames.has("options");
+
+    for (const paramKey of Object.keys(parameters)) {
+      if (topLevelNames.has(paramKey)) continue;
+      // Common params that are always valid at top level
+      if (["resource", "operation"].includes(paramKey)) continue;
+
+      // If the node has an "options" collection and this param isn't top-level,
+      // it likely belongs inside options
+      if (hasOptions) {
+        warnings.push({
+          type: "property_location_hint",
+          node: name,
+          property: paramKey,
+          message: `"${paramKey}" is not a top-level parameter for this node type. It may belong inside "options".`,
+          suggestion: `Move "${paramKey}" inside the "options" object: { options: { ${paramKey}: ... } }`,
+        });
+      }
+    }
   }
 
   return { errors, warnings };
