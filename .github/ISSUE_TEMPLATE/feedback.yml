@@ -1,0 +1,52 @@
+name: General Feedback
+description: Share your experience, token savings, or any other thoughts
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        We love hearing how people use n8n-mcp-lite. Real-world feedback directly shapes the roadmap.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Feedback type
+      options:
+        - Token savings / performance result
+        - Workflow it helped build
+        - Pain point / friction area
+        - Comparison with another MCP server
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Tell us more
+      placeholder: |
+        Examples:
+        - "Reduced my 78-node workflow from 600K to 16K tokens using scan + focus"
+        - "The preflight blocked a SQL injection in our internal automation"
+        - "Ghost Payload saved me 10 minutes of debugging $json field names"
+    validations:
+      required: true
+
+  - type: input
+    id: workflow_size
+    attributes:
+      label: Approximate workflow size (nodes)
+      placeholder: "e.g. 45 nodes"
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: AI client you use
+      options:
+        - Claude Code
+        - Claude Desktop
+        - Cursor
+        - Cline
+        - Windsurf
+        - Google Antigravity
+        - Other

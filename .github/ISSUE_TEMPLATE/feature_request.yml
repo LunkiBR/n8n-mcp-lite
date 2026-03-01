@@ -1,0 +1,41 @@
+name: Feature Request
+description: Suggest a new tool, improvement, or behaviour change
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea that would make n8n-mcp-lite even better? Describe it below.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      placeholder: "e.g. When working with large AI Agent nodes, it's hard to tell which tools are connected without reading the entire node JSON."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      placeholder: Describe the feature or change you have in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      placeholder: Any other approaches you thought of?
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: How important is this to your workflow?
+      options:
+        - Nice to have
+        - Would save me significant time
+        - Blocking — I cannot use the tool without this
+    validations:
+      required: true

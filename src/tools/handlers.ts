@@ -1530,22 +1530,38 @@ export class ToolHandlers {
       // 2. Activate it
       await this.api.activateWorkflow(createdId);
 
-      // 3. Wait for activation to propagate, then trigger with retry
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-
-      // 4. Trigger webhook with mock data.
-      // Uses triggerWebhookWithStatus so the HTTP 404 (webhook not yet active)
-      // is detected from the actual HTTP status code — not from the JSON body,
-      // which is unreliable (n8n may return JSON or empty body on 404).
+      // 3. Poll webhook until active, with exponential backoff.
+      // n8n needs time to register the webhook after activation — on fast
+      // instances this is ~500ms, on slow/cloud instances it can take 3-5s.
+      // Instead of a hardcoded sleep + single retry, we poll with increasing
+      // delays until we get a non-404 response or we exhaust the user timeout.
       const triggerAttempt = () =>
         this.api.triggerWebhookWithStatus(webhookPath, "POST", mockInput);
 
-      let result = await triggerAttempt();
+      const pollDelays = [500, 1000, 1500, 2000, 3000]; // 5 attempts, total max ~8s wait
+      let result: { status: number; body: unknown } | undefined;
 
-      // If we got HTTP 404 (webhook not yet active), retry once after extra wait
-      if (result.status === 404) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+      for (let i = 0; i < pollDelays.length; i++) {
+        await new Promise((resolve) => setTimeout(resolve, pollDelays[i]));
+
+        // Respect user-provided timeout
+        if (Date.now() - startTime > timeout) break;
+
         result = await triggerAttempt();
+
+        // 404 means webhook is not yet registered — keep polling
+        if (result.status !== 404) break;
+      }
+
+      // If all attempts returned 404, give a clear message
+      if (!result || result.status === 404) {
+        const durationMs = Date.now() - startTime;
+        return ok({
+          success: false,
+          error:
+            "Webhook not active after multiple retries. The n8n instance may be slow to register webhooks. Try increasing the timeout parameter.",
+          durationMs,
+        });
       }
 
       const durationMs = Date.now() - startTime;

@@ -1,0 +1,68 @@
+name: Bug Report
+description: Something is not working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please fill in the details below so we can reproduce and fix it quickly.
+
+  - type: input
+    id: version
+    attributes:
+      label: n8n-mcp-lite version
+      placeholder: "e.g. 1.4.0 — run: npx n8n-mcp-lite --version"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: client
+    attributes:
+      label: AI client
+      options:
+        - Claude Code
+        - Claude Desktop
+        - Cursor
+        - Cline
+        - Windsurf
+        - Google Antigravity
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: tool
+    attributes:
+      label: Which tool triggered the bug?
+      placeholder: "e.g. focus_workflow, test_node, update_nodes"
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      placeholder: Describe the bug — what you did, what you expected, what actually happened.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Call tool X with params Y
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error message / logs (if any)
+      render: shell

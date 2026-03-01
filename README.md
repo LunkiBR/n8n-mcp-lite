@@ -413,6 +413,16 @@ When adding or modifying tools, maintain the LiteNode format contract and ensure
 
 ---
 
+## Feedback & Contributing
+
+Issues, bug reports, feature requests, and real-world results are all welcome:
+
+- **Bug?** → [Open a bug report](../../issues/new?template=bug_report.yml)
+- **Feature idea?** → [Open a feature request](../../issues/new?template=feature_request.yml)
+- **Token savings or workflow story?** → [Share your feedback](../../issues/new?template=feedback.yml)
+
+The feedback templates live in `.github/ISSUE_TEMPLATE/`. All three categories feed directly into the roadmap.
+
 ## License
 
 MIT
