@@ -384,44 +384,19 @@ The server makes no assumptions about which model is on the other side of the MC
 
 ---
 
-## Feedback Wanted
-
-This project is actively optimizing for real-world production cases, not toy examples.
-
-If you're running workflows above 50 nodes, open an issue with:
-
-- Node count
-- Token estimate from `scan_workflow`
-- Your use case (what you're trying to do with AI assistance)
-
-Edge cases from real workflows directly shape what gets built next.
-
-→ [Open an issue](https://github.com/LunkiBR/n8n-mcp-lite/issues)
-
----
-
-## Contributing
-
-Contributions are welcome. See `CONTRIBUTING.md` for:
-
-- Development setup
-- Benchmark methodology and tooling (`benchmark.mjs`)
-- Testing strategy
-- Good first issues
-
-When adding or modifying tools, maintain the LiteNode format contract and ensure all mutating paths run through the preflight pipeline.
-
----
-
 ## Feedback & Contributing
 
-Issues, bug reports, feature requests, and real-world results are all welcome:
+This project is actively optimizing for real-world production cases, not toy examples. Issues, bug reports, feature requests, and real-world results are all welcome:
 
 - **Bug?** → [Open a bug report](../../issues/new?template=bug_report.yml)
 - **Feature idea?** → [Open a feature request](../../issues/new?template=feature_request.yml)
 - **Token savings or workflow story?** → [Share your feedback](../../issues/new?template=feedback.yml)
 
-The feedback templates live in `.github/ISSUE_TEMPLATE/`. All three categories feed directly into the roadmap.
+If you're running workflows above 50 nodes, open a feedback issue with your node count, `scan_workflow` token estimate, and use case. Edge cases from real workflows directly shape what gets built next.
+
+Code contributions are welcome. When adding or modifying tools, maintain the LiteNode format contract and ensure all mutating paths run through the preflight pipeline.
+
+The structured issue templates live in `.github/ISSUE_TEMPLATE/`.
 
 ## License
 
