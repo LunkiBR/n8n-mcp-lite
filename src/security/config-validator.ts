@@ -48,12 +48,13 @@ export function validateNodeConfig(
 
       const value = parameters[prop.n];
       if (value === undefined || value === null || value === "") {
-        errors.push({
-          type: "missing_required",
+        // Advisory only — the AI may fill via expression or n8n may have defaults
+        warnings.push({
+          type: "missing_field",
           node: name,
           property: prop.n,
           message: `Required property "${prop.dn || prop.n}" is missing or empty.`,
-          fix: prop.def !== undefined
+          suggestion: prop.def !== undefined
             ? `Set "${prop.n}" (default: ${JSON.stringify(prop.def)})`
             : `Provide a value for "${prop.n}"`,
         });
@@ -74,12 +75,13 @@ export function validateNodeConfig(
 
       const allowedValues = prop.opts.map((o) => o.v);
       if (typeof value === "string" && !allowedValues.includes(value)) {
-        errors.push({
-          type: "invalid_value",
+        // Advisory only — the knowledge DB may not have all valid options
+        warnings.push({
+          type: "schema_mismatch",
           node: name,
           property: prop.n,
-          message: `Invalid value "${value}" for "${prop.dn || prop.n}". Allowed values: ${allowedValues.join(", ")}`,
-          fix: `Use one of: ${allowedValues.join(", ")}`,
+          message: `Value "${value}" for "${prop.dn || prop.n}" not in known options: ${allowedValues.join(", ")}. May still be valid in your n8n instance.`,
+          suggestion: `Known values: ${allowedValues.join(", ")}`,
         });
       }
     }
@@ -93,12 +95,13 @@ export function validateNodeConfig(
     if (resource !== undefined) {
       const validResources = [...new Set(nodeSchema.ops.map((o) => o.r))];
       if (typeof resource === "string" && !resource.startsWith("=") && !validResources.includes(resource)) {
-        errors.push({
-          type: "invalid_value",
+        // Advisory only — n8n is the final validator
+        warnings.push({
+          type: "schema_mismatch",
           node: name,
           property: "resource",
-          message: `Invalid resource "${resource}". Available: ${validResources.join(", ")}`,
-          fix: `Use one of: ${validResources.join(", ")}`,
+          message: `Resource "${resource}" not in known list: ${validResources.join(", ")}. May still be valid in your n8n instance.`,
+          suggestion: `Known resources: ${validResources.join(", ")}`,
         });
       }
     }
@@ -114,12 +117,13 @@ export function validateNodeConfig(
         validOps.length > 0 &&
         !validOps.includes(operation)
       ) {
-        errors.push({
-          type: "invalid_value",
+        // Advisory only — n8n is the final validator
+        warnings.push({
+          type: "schema_mismatch",
           node: name,
           property: "operation",
-          message: `Invalid operation "${operation}" for resource "${resource}". Available: ${validOps.join(", ")}`,
-          fix: `Use one of: ${validOps.join(", ")}`,
+          message: `Operation "${operation}" for resource "${resource}" not in known list: ${validOps.join(", ")}. May still be valid in your n8n instance.`,
+          suggestion: `Known operations for "${resource}": ${validOps.join(", ")}`,
         });
       }
     }

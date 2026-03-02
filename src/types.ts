@@ -169,6 +169,10 @@ export interface NodeRunData {
   outputs?: Array<NodeOutputData | null>;
   /** Error message if the node failed */
   error?: string;
+  /** Error type name (e.g. "NodeApiError") */
+  errorType?: string;
+  /** HTTP status code if the error is HTTP-related */
+  httpCode?: number;
 }
 
 /** Map of node name -> run data extracted from execution */

@@ -29,7 +29,9 @@ export interface ValidationWarning {
     | "expression_hint"
     | "unknown_node_warning"
     | "property_location_hint"
-    | "type_mismatch";
+    | "type_mismatch"
+    | "schema_mismatch"
+    | "missing_field";
   property?: string;
   node?: string;
   message: string;

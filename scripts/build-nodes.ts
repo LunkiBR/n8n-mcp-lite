@@ -93,7 +93,11 @@ const ESSENTIAL_PROPS: Record<string, { required: string[]; common: string[] }> 
 };
 
 // Max props if no curated list
-const MAX_FALLBACK_PROPS = 20;
+const MAX_FALLBACK_PROPS = 25;
+// Max options per property
+const MAX_OPTIONS = 50;
+// Max sub-properties per collection
+const MAX_SUB_PROPS = 15;
 
 // ---- Read database ----
 
@@ -267,7 +271,7 @@ db.close();
 
 // ---- Helpers ----
 
-function simplifyProperty(prop: any): Record<string, unknown> {
+function simplifyProperty(prop: any, depth = 0): Record<string, unknown> {
   const result: Record<string, unknown> = {
     n: prop.name,
     dn: prop.displayName || prop.name,
@@ -279,17 +283,43 @@ function simplifyProperty(prop: any): Record<string, unknown> {
     result.def = prop.default;
   }
 
-  // Options (limit to 20)
+  // Options (limit to MAX_OPTIONS)
   if (Array.isArray(prop.options) && prop.options.length > 0) {
-    result.opts = prop.options.slice(0, 20).map((o: any) => ({
-      v: String(o.value ?? o.name ?? o),
-      l: String(o.name ?? o.value ?? o),
-    }));
+    // For collection/fixedCollection, options contain sub-properties
+    if (
+      (prop.type === "collection" || prop.type === "fixedCollection") &&
+      depth < 1 // Only recurse 1 level deep
+    ) {
+      const subProps: Record<string, unknown>[] = [];
+      for (const opt of prop.options.slice(0, MAX_SUB_PROPS)) {
+        if (opt.name && (opt.type || opt.displayName)) {
+          // This is a sub-property definition
+          subProps.push(simplifyProperty(opt, depth + 1));
+        } else if (opt.values && Array.isArray(opt.values)) {
+          // fixedCollection: options have { name, displayName, values: [...subProps] }
+          for (const subProp of opt.values.slice(0, MAX_SUB_PROPS)) {
+            subProps.push(simplifyProperty(subProp, depth + 1));
+          }
+        }
+      }
+      if (subProps.length > 0) result.sub = subProps;
+    } else {
+      // Regular options (enum values)
+      result.opts = prop.options.slice(0, MAX_OPTIONS).map((o: any) => ({
+        v: String(o.value ?? o.name ?? o),
+        l: String(o.name ?? o.value ?? o),
+      }));
+    }
   }
 
-  // Display conditions
+  // Display conditions: show
   if (prop.displayOptions?.show) {
     result.show = prop.displayOptions.show;
+  }
+
+  // Display conditions: hide
+  if (prop.displayOptions?.hide) {
+    result.hide = prop.displayOptions.hide;
   }
 
   return result;

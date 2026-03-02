@@ -63,6 +63,10 @@ export interface CompactProperty {
   req?: true;
   /** Conditional display: displayOptions.show */
   show?: Record<string, unknown>;
+  /** Conditional hide: displayOptions.hide */
+  hide?: Record<string, unknown>;
+  /** Sub-properties for collection/fixedCollection types */
+  sub?: CompactProperty[];
 }
 
 /** Search result returned by NodeDatabase.searchNodes() */

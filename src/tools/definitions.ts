@@ -36,7 +36,7 @@ export const TOOLS: Tool[] = [
   {
     name: "get_workflow",
     description:
-      "Get a workflow in simplified format. 80%+ fewer tokens than raw n8n JSON. Strips positions, duplicated data, user profiles, empty defaults. Returns nodes with essential params, flow connections, settings. For large workflows (30+ nodes), prefer scan_workflow first, then focus_workflow for the area you need.",
+      'Get a workflow in simplified format (80%+ fewer tokens) or raw n8n JSON. For large workflows (30+ nodes), prefer scan_workflow first, then focus_workflow. Use format="raw" only for debugging.',
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -46,26 +46,9 @@ export const TOOLS: Tool[] = [
         },
         format: {
           type: "string",
-          enum: ["json", "text"],
+          enum: ["json", "text", "raw"],
           description:
-            'Output format: "json" (structured, default) or "text" (human-readable summary, even fewer tokens)',
-        },
-      },
-      required: ["id"],
-    },
-  },
-
-  // ---- Workflow reading (raw) ----
-  {
-    name: "get_workflow_raw",
-    description:
-      "Get a workflow in raw n8n JSON format. Only use when you need the exact original structure (e.g., for debugging). Much more tokens than get_workflow.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        id: {
-          type: "string",
-          description: "Workflow ID",
+            '"json" (default): simplified structured format. "text": human-readable summary (fewest tokens). "raw": original n8n JSON (most tokens, for debugging).',
         },
       },
       required: ["id"],
@@ -212,6 +195,11 @@ export const TOOLS: Tool[] = [
             required: ["op"],
           },
         },
+        continueOnError: {
+          type: "boolean",
+          description:
+            "If true, apply valid operations even if some fail (best-effort mode). Returns applied and failed operation indices. Default: false (atomic)",
+        },
         approve: {
           type: "string",
           description:
@@ -251,7 +239,7 @@ export const TOOLS: Tool[] = [
   // ---- Workflow activation ----
   {
     name: "activate_workflow",
-    description: "Activate a workflow to enable automatic trigger execution.",
+    description: "Activate or deactivate a workflow. Set active: true to enable, active: false to disable. Defaults to true (activate).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -259,20 +247,9 @@ export const TOOLS: Tool[] = [
           type: "string",
           description: "Workflow ID",
         },
-      },
-      required: ["id"],
-    },
-  },
-
-  {
-    name: "deactivate_workflow",
-    description: "Deactivate a workflow to stop automatic trigger execution.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        id: {
-          type: "string",
-          description: "Workflow ID",
+        active: {
+          type: "boolean",
+          description: "true (default) to activate, false to deactivate",
         },
       },
       required: ["id"],
@@ -281,51 +258,51 @@ export const TOOLS: Tool[] = [
 
   // ---- Execution management ----
   {
-    name: "list_executions",
+    name: "executions",
     description:
-      "List workflow executions with filtering by workflow, status, etc.",
+      'Manage workflow executions. action="list": list executions with filters. action="get": get details of a single execution. Use mode="error" for rich 5-phase debugging (primary error, upstream context, execution path, suggestions).',
     inputSchema: {
       type: "object" as const,
       properties: {
-        workflowId: {
+        action: {
           type: "string",
-          description: "Filter by workflow ID",
+          enum: ["list", "get"],
+          description: '"list" to list executions, "get" to get execution details',
         },
-        status: {
-          type: "string",
-          enum: ["success", "error", "waiting"],
-          description: "Filter by status",
-        },
-        limit: {
-          type: "number",
-          description: "Max results (default 20)",
-        },
-        cursor: {
-          type: "string",
-          description: "Pagination cursor",
-        },
-      },
-    },
-  },
-
-  {
-    name: "get_execution",
-    description:
-      "Get details of a specific workflow execution. Use includeData to get the node-level output data (which fields each node produced).",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
         id: {
           type: "string",
-          description: "Execution ID",
+          description: "Execution ID (required for action=get)",
+        },
+        mode: {
+          type: "string",
+          enum: ["summary", "error"],
+          description:
+            'For action=get: "summary" (default) or "error" (rich 5-phase error analysis with suggestions)',
         },
         includeData: {
           type: "boolean",
           description:
-            "Include node output data from the execution (default: false). Returns a map of nodeName → { outputKeys, itemCount }.",
+            "For action=get, mode=summary: include node output data (default: false)",
+        },
+        workflowId: {
+          type: "string",
+          description: "For action=list: filter by workflow ID",
+        },
+        status: {
+          type: "string",
+          enum: ["success", "error", "waiting"],
+          description: "For action=list: filter by status",
+        },
+        limit: {
+          type: "number",
+          description: "For action=list: max results (default 20)",
+        },
+        cursor: {
+          type: "string",
+          description: "For action=list: pagination cursor",
         },
       },
-      required: ["id"],
+      required: ["action"],
     },
   },
 
@@ -381,7 +358,7 @@ export const TOOLS: Tool[] = [
   {
     name: "focus_workflow",
     description:
-      "Focus on a specific area of a workflow. Returns FULL detail (params, creds, code) ONLY for focused nodes; everything else becomes a minimal dormant summary with zone classification (upstream/downstream/parallel). Use after scan_workflow to zoom into the area you need. Three selection modes: explicit node names, branch auto-discovery, or range between two nodes. For modifications, use update_nodes on the focused nodes.",
+      "Focus on a specific area of a workflow. Returns FULL detail (params, creds, code) ONLY for focused nodes; everything else is minimal. Four selection modes: explicit nodes, branch auto-discovery, range (from/to), or expand (add adjacent nodes to previous focus).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -393,21 +370,21 @@ export const TOOLS: Tool[] = [
           type: "array",
           items: { type: "string" },
           description:
-            "Explicit list of node names to focus on (any nodes in the workflow)",
+            "Explicit list of node names to focus on",
         },
         branch: {
           type: "object",
           description:
-            "Auto-discover a branch: follows all nodes from a specific output of a branching node (Switch, IF, etc.)",
+            "Auto-discover a branch from a Switch/IF node",
           properties: {
             node: {
               type: "string",
-              description: "Name of the branching node (e.g., Switch or IF node)",
+              description: "Name of the branching node",
             },
             outputIndex: {
               type: "number",
               description:
-                "Which output branch to follow (0=first/true, 1=second/false, etc.)",
+                "Which output branch to follow (0=first/true, 1=second/false)",
             },
             maxDepth: {
               type: "number",
@@ -416,7 +393,7 @@ export const TOOLS: Tool[] = [
             includeUpstream: {
               type: "number",
               description:
-                "Include N levels of upstream nodes before the branch node (default: 0)",
+                "Include N levels upstream of the branch node (default: 0)",
             },
           },
           required: ["node", "outputIndex"],
@@ -424,104 +401,69 @@ export const TOOLS: Tool[] = [
         range: {
           type: "object",
           description:
-            "Focus on all nodes between two points in the workflow flow",
+            "Focus on all nodes between two points in the workflow",
           properties: {
-            from: {
-              type: "string",
-              description: "Start node name (included in focus)",
-            },
-            to: {
-              type: "string",
-              description: "End node name (included in focus)",
-            },
+            from: { type: "string", description: "Start node name" },
+            to: { type: "string", description: "End node name" },
           },
           required: ["from", "to"],
+        },
+        // Expand mode (absorbs expand_focus)
+        expandFrom: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Expand mode: current focused node names to expand from (replaces expand_focus tool)",
+        },
+        addNodes: {
+          type: "array",
+          items: { type: "string" },
+          description: "For expand mode: specific node names to add to focus",
+        },
+        expandUpstream: {
+          type: "number",
+          description: "For expand mode: add N levels of upstream nodes",
+        },
+        expandDownstream: {
+          type: "number",
+          description: "For expand mode: add N levels of downstream nodes",
         },
         executionId: {
           type: "string",
           description:
-            "Optional execution ID. When provided, injects inputHint on focused nodes showing which $json.xxx fields are available from the last execution's upstream node data.",
+            "Optional execution ID for inputHint injection showing available $json fields.",
         },
       },
       required: ["id"],
     },
   },
-
-  // ---- Focus Mode: Expand ----
+  // ---- Version Control ----
   {
-    name: "expand_focus",
+    name: "versions",
     description:
-      "Expand an existing focus area by adding adjacent nodes. Use after focus_workflow to iteratively include more context without pulling the entire workflow.",
+      'Manage workflow version snapshots. action="list": list snapshots for a workflow. action="rollback": restore workflow to a previous snapshot (safety snapshot auto-created).',
     inputSchema: {
       type: "object" as const,
       properties: {
-        id: {
+        action: {
+          type: "string",
+          enum: ["list", "rollback"],
+          description: '"list" to see snapshots, "rollback" to restore a snapshot',
+        },
+        workflowId: {
           type: "string",
           description: "Workflow ID",
         },
-        currentFocus: {
-          type: "array",
-          items: { type: "string" },
-          description:
-            "Current focused node names (from previous focus_workflow result)",
-        },
-        addNodes: {
-          type: "array",
-          items: { type: "string" },
-          description: "Specific node names to add to focus",
-        },
-        expandUpstream: {
-          type: "number",
-          description:
-            "Add N levels of upstream nodes (parents/grandparents of current focus)",
-        },
-        expandDownstream: {
-          type: "number",
-          description:
-            "Add N levels of downstream nodes (children/grandchildren of current focus)",
-        },
-      },
-      required: ["id", "currentFocus"],
-    },
-  },
-  // ---- Version Control ----
-  {
-    name: "list_versions",
-    description:
-      "List local snapshots (backups) of a workflow. Snapshots are created automatically before every mutation (update_nodes, update_workflow, delete). Use rollback_workflow to restore a previous version.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        workflowId: {
+        snapshotId: {
           type: "string",
-          description: "Workflow ID to list snapshots for",
+          description: "Snapshot ID to restore (required for action=rollback, get from action=list)",
         },
         limit: {
           type: "number",
-          description: "Max snapshots to return (default: all)",
+          description: "For action=list: max snapshots to return (default: all)",
         },
       },
-      required: ["workflowId"],
-    },
-  },
-
-  {
-    name: "rollback_workflow",
-    description:
-      "Restore a workflow to a previous snapshot. This overwrites the current workflow state with the backed-up version. Use list_versions first to find the snapshot ID.",
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        workflowId: {
-          type: "string",
-          description: "Workflow ID to rollback",
-        },
-        snapshotId: {
-          type: "string",
-          description: "Snapshot ID to restore (from list_versions)",
-        },
-      },
-      required: ["workflowId", "snapshotId"],
+      required: ["action", "workflowId"],
     },
   },
 
@@ -579,114 +521,55 @@ export const TOOLS: Tool[] = [
     },
   },
 
-  // ---- Knowledge: Search Patterns ----
+  // ---- Knowledge base (unified) ----
   {
-    name: "search_patterns",
+    name: "knowledge",
     description:
-      'Search ready-made workflow recipe templates by keyword. Returns matching patterns with id, name, description, tags, complexity, and requiredParams. Use BEFORE create_workflow to find existing templates. Query with keywords like "whatsapp", "ai agent", "webhook", "evolution", "meta".',
+      'Unified knowledge base: patterns (workflow templates), gotchas (node quirks/best practices), payloads (webhook schemas), providers (list available), expressions (cookbook). Use topic + action to navigate.',
     inputSchema: {
       type: "object" as const,
       properties: {
+        topic: {
+          type: "string",
+          enum: ["patterns", "gotchas", "payloads", "providers", "expressions"],
+          description: "Knowledge area to query",
+        },
+        action: {
+          type: "string",
+          enum: ["search", "get", "list"],
+          description: '"search" (default): search by query. "get": get by ID. "list": list all entries.',
+        },
         query: {
           type: "string",
-          description: 'Search keywords (e.g. "whatsapp evolution ai", "webhook router", "menu bot")',
+          description: 'Search keywords (e.g. "whatsapp ai", "switch fallthrough", "cross branch")',
+        },
+        id: {
+          type: "string",
+          description: "For action=get: pattern ID or provider ID",
         },
         tags: {
           type: "array",
           items: { type: "string" },
-          description: 'Filter by tags (e.g. ["whatsapp", "ai-agent"])',
+          description: "For topic=patterns: filter by tags",
         },
-      },
-      required: ["query"],
-    },
-  },
-
-  // ---- Knowledge: Get Pattern ----
-  {
-    name: "get_pattern",
-    description:
-      'Get a complete workflow recipe template by ID. Returns full nodes[] and flow[] ready to use with create_workflow. Also returns requiredParams listing what to ask the user before creating. Use search_patterns first to find the pattern ID.',
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        id: {
-          type: "string",
-          description: 'Pattern ID from search_patterns (e.g. "whatsapp-evolution-ai-agent")',
-        },
-      },
-      required: ["id"],
-    },
-  },
-
-  // ---- Knowledge: Get Payload Schema ----
-  {
-    name: "get_payload_schema",
-    description:
-      'Get webhook payload schema + extraction expressions for a specific provider. Returns the incoming JSON structure, ready-to-use n8n expressions for each field, and send message formats. Use when building integrations with WhatsApp, Telegram, or other webhook-based services.',
-    inputSchema: {
-      type: "object" as const,
-      properties: {
         provider: {
           type: "string",
-          description: 'Provider ID. Use list_providers to see available options. Examples: "evolution-api", "whatsapp-meta-cloud", "z-api", "telegram"',
+          description: "For topic=payloads: provider ID",
         },
         event: {
           type: "string",
-          description: 'Optional: specific event name to focus on (e.g. "messages.upsert", "messages")',
-        },
-      },
-      required: ["provider"],
-    },
-  },
-
-  // ---- Knowledge: Get n8n Knowledge ----
-  {
-    name: "get_n8n_knowledge",
-    description:
-      'Look up gotchas, quirks, and best practices for n8n nodes and patterns. Returns documented issues with solutions and example code. Use when you\'re unsure about node behavior, connection types, or common pitfalls. Query by keyword or node type.',
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        query: {
-          type: "string",
-          description: 'What you want to know (e.g. "switch fallthrough", "ai agent output", "meta webhook verification", "session memory")',
+          description: "For topic=payloads: specific event to focus on",
         },
         nodeType: {
           type: "string",
-          description: 'Optional: filter by node type (e.g. "switch", "ai-agent", "postgres", "httpRequest")',
-        },
-      },
-    },
-  },
-
-  // ---- Knowledge: List Providers ----
-  {
-    name: "list_providers",
-    description:
-      'List all webhook/API providers that have documented payload schemas. Returns provider IDs to use with get_payload_schema.',
-    inputSchema: {
-      type: "object" as const,
-      properties: {},
-    },
-  },
-
-  // ---- Knowledge: Search Expressions ----
-  {
-    name: "search_expressions",
-    description:
-      'Search the n8n expression cookbook for ready-made expressions. Returns expressions for common use cases: cross-branch data access, WhatsApp field extraction, date formatting, null handling, etc.',
-    inputSchema: {
-      type: "object" as const,
-      properties: {
-        query: {
-          type: "string",
-          description: 'What you need (e.g. "extract whatsapp phone", "cross branch reference", "null default", "date format")',
+          description: "For topic=gotchas: filter by node type",
         },
         category: {
           type: "string",
-          description: 'Optional: filter by category ID (e.g. "cross-branch", "whatsapp-specific", "ai-agent-specific", "null-handling")',
+          description: "For topic=expressions: filter by category ID",
         },
       },
+      required: ["topic"],
     },
   },
   // ---- Dry-Run: Test Node ----
@@ -721,6 +604,79 @@ export const TOOLS: Tool[] = [
         },
       },
       required: ["node", "mockInput"],
+    },
+  },
+
+  // ---- Validate node config ----
+  {
+    name: "validate_node",
+    description:
+      "Validate a node configuration BEFORE creating a workflow. Returns warnings and suggestions without blocking anything. Use get_node first to see available properties, then validate_node to check your config.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        nodeType: {
+          type: "string",
+          description: 'Node type (e.g. "httpRequest", "slack", "telegram")',
+        },
+        config: {
+          type: "object",
+          description: "Node parameters to validate (the params object you would pass to create_workflow)",
+        },
+        mode: {
+          type: "string",
+          enum: ["full", "quick"],
+          description: '"full" (default): check all properties, expressions, types. "quick": required fields only.',
+        },
+      },
+      required: ["nodeType", "config"],
+    },
+  },
+
+  // ---- Autofix workflow ----
+  {
+    name: "autofix_workflow",
+    description:
+      'Automatically fix common workflow issues. Preview fixes first (default) or apply them. Fix types: expression-format (missing = prefix), typeversion-correction (version too high), webhook-missing-path, error-output-config. A snapshot is saved before applying.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        id: {
+          type: "string",
+          description: "Workflow ID to fix",
+        },
+        applyFixes: {
+          type: "boolean",
+          description: "Apply fixes to workflow (default: false — preview mode)",
+        },
+        fixTypes: {
+          type: "array",
+          items: { type: "string" },
+          description: 'Limit to specific fix types: "expression-format", "typeversion-correction", "webhook-missing-path", "error-output-config"',
+        },
+        confidenceThreshold: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "Minimum confidence for fixes (default: medium)",
+        },
+      },
+      required: ["id"],
+    },
+  },
+
+  // ---- Tool documentation ----
+  {
+    name: "tools_documentation",
+    description:
+      'Get tool docs and workflow guide. Call without args for the recommended AI workflow (discover → learn → create → test → debug → fix). Call with topic for specific tool docs.',
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        topic: {
+          type: "string",
+          description: 'Tool name (e.g. "create_workflow", "executions") or "overview" for the full guide',
+        },
+      },
     },
   },
 

@@ -488,16 +488,22 @@ export function extractExecutionRunData(
     // Take the last run (most recent execution of this node)
     const lastRun = runs[runs.length - 1] as Record<string, unknown>;
 
-    // Check for errors
+    // Check for errors — extract rich error info
     if (lastRun.error) {
+      const errObj = lastRun.error as Record<string, unknown> | string;
       result[nodeName] = {
         outputKeys: [],
         itemCount: 0,
         error:
-          typeof lastRun.error === "string"
-            ? lastRun.error
-            : ((lastRun.error as Record<string, unknown>)?.message as string) ??
-              "error",
+          typeof errObj === "string"
+            ? errObj
+            : (errObj?.message as string) ?? "error",
+        errorType:
+          typeof errObj === "object" ? (errObj?.name as string) : undefined,
+        httpCode:
+          typeof errObj === "object"
+            ? (errObj?.httpCode as number)
+            : undefined,
       };
       continue;
     }

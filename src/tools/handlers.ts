@@ -38,9 +38,14 @@ import { nodeDb } from "../knowledge/node-db.js";
 import { NODE_FLAGS } from "../knowledge/types.js";
 import { VersionStore } from "../versioning/version-store.js";
 import { runPreflight, buildVirtualState } from "../security/preflight.js";
-import type { PreflightResult } from "../security/types.js";
+import type { PreflightResult, VirtualNode } from "../security/types.js";
+import { validateNodeConfig } from "../security/config-validator.js";
+import { validateAllExpressions } from "../security/expression-validator.js";
 import { knowledgeDb } from "../knowledge/pattern-db.js";
 import { ApprovalStore } from "../approval/approval-store.js";
+import { processErrorExecution } from "../transform/error-processor.js";
+import { detectFixes, applyFixes } from "../transform/autofix.js";
+import { getDocumentation } from "./documentation.js";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }> };
 
@@ -54,6 +59,45 @@ function err(message: string): ToolResult {
   return {
     content: [{ type: "text", text: `Error: ${message}` }],
   };
+}
+
+/**
+ * Coerce stringified arguments from MCP clients.
+ * Some clients serialize arrays/objects as JSON strings, booleans as "true"/"false",
+ * and numbers as strings. This normalizes them in-place.
+ */
+function coerceArgs(args: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value !== "string") continue;
+
+    // JSON arrays or objects
+    if (
+      (value.startsWith("[") && value.endsWith("]")) ||
+      (value.startsWith("{") && value.endsWith("}"))
+    ) {
+      try {
+        args[key] = JSON.parse(value);
+      } catch {
+        /* keep original */
+      }
+      continue;
+    }
+
+    // Booleans
+    if (value === "true") {
+      args[key] = true;
+      continue;
+    }
+    if (value === "false") {
+      args[key] = false;
+      continue;
+    }
+
+    // Integers (only pure digit strings)
+    if (/^\d+$/.test(value) && value.length < 16) {
+      args[key] = parseInt(value, 10);
+    }
+  }
 }
 
 export class ToolHandlers {
@@ -112,6 +156,9 @@ export class ToolHandlers {
 
   async handle(name: string, args: Record<string, unknown>): Promise<ToolResult> {
     try {
+      // Arg coercion: MCP clients may serialize arrays/objects as strings
+      coerceArgs(args);
+
       // Input validation (Pilar 0)
       const schema = TOOL_SCHEMAS[name];
       if (schema) {
@@ -123,9 +170,8 @@ export class ToolHandlers {
         case "list_workflows":
           return await this.listWorkflows(args);
         case "get_workflow":
-          return await this.getWorkflow(args);
-        case "get_workflow_raw":
-          return await this.getWorkflowRaw(args);
+        case "get_workflow_raw": // Legacy alias
+          return await this.getWorkflow(args.format ? args : { ...args, format: name === "get_workflow_raw" ? "raw" : undefined });
         case "create_workflow":
           return await this.createWorkflow(args);
         case "update_workflow":
@@ -135,44 +181,63 @@ export class ToolHandlers {
         case "delete_workflow":
           return await this.deleteWorkflow(args);
         case "activate_workflow":
-          return await this.activateWorkflow(args);
-        case "deactivate_workflow":
-          return await this.deactivateWorkflow(args);
+        case "deactivate_workflow": // Legacy alias
+          return await this.activateWorkflow(
+            name === "deactivate_workflow" ? { ...args, active: false } : args
+          );
+        case "executions":
+          return await this.executions(args);
+        // Legacy aliases
         case "list_executions":
-          return await this.listExecutions(args);
+          return await this.executions({ ...args, action: "list" });
         case "get_execution":
-          return await this.getExecution(args);
+          return await this.executions({ ...args, action: "get" });
         case "trigger_webhook":
           return await this.triggerWebhook(args);
         case "scan_workflow":
           return await this.scanWorkflow(args);
         case "focus_workflow":
           return await this.focusWorkflow(args);
-        case "expand_focus":
-          return await this.expandFocus(args);
+        case "expand_focus": // Legacy alias
+          return await this.focusWorkflow({
+            ...args,
+            expandFrom: args.currentFocus,
+          });
         case "search_nodes":
           return await this.searchNodes(args);
         case "get_node":
           return await this.getNodeInfo(args);
+        case "versions":
+          return await this.versions(args);
+        // Legacy aliases
         case "list_versions":
-          return await this.listVersions(args);
+          return await this.versions({ ...args, action: "list" });
         case "rollback_workflow":
-          return await this.rollbackWorkflow(args);
-        // ---- Knowledge base ----
+          return await this.versions({ ...args, action: "rollback" });
+        // ---- Knowledge base (unified) ----
+        case "knowledge":
+          return this.knowledge(args);
+        // Legacy aliases
         case "search_patterns":
-          return this.searchPatterns(args);
+          return this.knowledge({ topic: "patterns", action: "search", ...args });
         case "get_pattern":
-          return this.getPattern(args);
+          return this.knowledge({ topic: "patterns", action: "get", ...args });
         case "get_payload_schema":
-          return this.getPayloadSchema(args);
+          return this.knowledge({ topic: "payloads", action: "get", ...args });
         case "get_n8n_knowledge":
-          return this.getN8nKnowledge(args);
+          return this.knowledge({ topic: "gotchas", action: "search", ...args });
         case "list_providers":
-          return this.listProviders();
+          return this.knowledge({ topic: "providers", action: "list" });
         case "search_expressions":
-          return this.searchExpressions(args);
+          return this.knowledge({ topic: "expressions", action: "search", ...args });
         case "test_node":
           return await this.testNode(args);
+        case "validate_node":
+          return this.validateNode(args);
+        case "autofix_workflow":
+          return await this.autofixWorkflow(args);
+        case "tools_documentation":
+          return this.toolsDocumentation(args);
         case "set_approval_mode":
           return this.setApprovalMode(args);
         default:
@@ -221,7 +286,7 @@ export class ToolHandlers {
     });
   }
 
-  // ---- Get workflow (simplified) ----
+  // ---- Get workflow (simplified, text, or raw) ----
   private async getWorkflow(
     args: Record<string, unknown>
   ): Promise<ToolResult> {
@@ -229,36 +294,29 @@ export class ToolHandlers {
     if (!id) return err("Missing workflow ID");
 
     const raw = await this.api.getWorkflow(id);
+    const format = args.format as string | undefined;
+
+    if (format === "raw") {
+      // Raw mode: strip only the worst offenders
+      const cleaned = { ...raw };
+      delete cleaned.activeVersion;
+      delete cleaned.shared;
+      delete cleaned.staticData;
+      delete cleaned.meta;
+      delete cleaned.pinData;
+      delete cleaned.versionId;
+      delete cleaned.activeVersionId;
+      delete cleaned.versionCounter;
+      return ok(cleaned);
+    }
+
     const lite = simplifyWorkflow(raw);
 
-    if (args.format === "text") {
+    if (format === "text") {
       return ok(workflowToText(lite));
     }
 
     return ok(lite);
-  }
-
-  // ---- Get workflow (raw) ----
-  private async getWorkflowRaw(
-    args: Record<string, unknown>
-  ): Promise<ToolResult> {
-    const id = args.id as string;
-    if (!id) return err("Missing workflow ID");
-
-    const raw = await this.api.getWorkflow(id);
-
-    // Still strip the worst offenders even in raw mode
-    const cleaned = { ...raw };
-    delete cleaned.activeVersion;
-    delete cleaned.shared;
-    delete cleaned.staticData;
-    delete cleaned.meta;
-    delete cleaned.pinData;
-    delete cleaned.versionId;
-    delete cleaned.activeVersionId;
-    delete cleaned.versionCounter;
-
-    return ok(cleaned);
   }
 
   // ---- Create workflow ----
@@ -464,9 +522,14 @@ export class ToolHandlers {
     ) as N8nConnections;
 
     const results: string[] = [];
+    const continueOnError = args.continueOnError as boolean | undefined;
+    const failedOps: Array<{ index: number; op: string; error: string }> = [];
 
-    for (const op of operations) {
+    for (let opIdx = 0; opIdx < operations.length; opIdx++) {
+      const op = operations[opIdx];
       const type = op.op as string;
+
+      try {
 
       switch (type) {
         case "addNode": {
@@ -696,6 +759,16 @@ export class ToolHandlers {
         default:
           results.push(`Unknown operation: ${type}`);
       }
+
+      } catch (opError) {
+        const msg = opError instanceof Error ? opError.message : String(opError);
+        if (continueOnError) {
+          failedOps.push({ index: opIdx, op: type, error: msg });
+          results.push(`FAILED: ${type} — ${msg}`);
+        } else {
+          throw opError; // Atomic mode: propagate to outer catch
+        }
+      }
     }
 
     // Preflight validation on the virtual post-mutation state
@@ -739,7 +812,9 @@ export class ToolHandlers {
       name: updated.name,
       nodeCount: updated.nodes?.length ?? 0,
       operations: results,
-      message: "Operations applied successfully",
+      ...(failedOps.length > 0
+        ? { failedOperations: failedOps, message: `${results.length - failedOps.length} succeeded, ${failedOps.length} failed` }
+        : { message: "Operations applied successfully" }),
       ...(preflight.warnings.length > 0
         ? { preflight: { warnings: preflight.warnings } }
         : {}),
@@ -801,34 +876,72 @@ export class ToolHandlers {
     const id = args.id as string;
     if (!id) return err("Missing workflow ID");
 
-    const result = await this.api.activateWorkflow(id);
+    const active = args.active !== false; // Default to true (activate)
+    const result = active
+      ? await this.api.activateWorkflow(id)
+      : await this.api.deactivateWorkflow(id);
+
     return ok({
       id: result.id,
       name: result.name,
       active: result.active,
-      message: "Workflow activated",
+      message: active ? "Workflow activated" : "Workflow deactivated",
     });
   }
 
-  private async deactivateWorkflow(
+  // ---- Executions (unified: list + get) ----
+  private async executions(
     args: Record<string, unknown>
   ): Promise<ToolResult> {
-    const id = args.id as string;
-    if (!id) return err("Missing workflow ID");
+    const action = (args.action as string) ?? "list";
 
-    const result = await this.api.deactivateWorkflow(id);
-    return ok({
-      id: result.id,
-      name: result.name,
-      active: result.active,
-      message: "Workflow deactivated",
-    });
-  }
+    if (action === "get") {
+      const id = args.id as string;
+      if (!id) return err("Missing execution ID (required for action=get)");
 
-  // ---- Executions ----
-  private async listExecutions(
-    args: Record<string, unknown>
-  ): Promise<ToolResult> {
+      const mode = (args.mode as string) ?? "summary";
+      const includeData = (args.includeData as boolean) ?? (mode === "error");
+
+      const exec = await this.api.getExecution(id, includeData || mode === "error");
+
+      // Error mode: rich 5-phase error analysis
+      if (mode === "error" && exec.data) {
+        let workflowRaw: unknown;
+        try {
+          workflowRaw = await this.api.getWorkflow(exec.workflowId);
+        } catch {
+          // Proceed without workflow context — heuristic fallback
+        }
+        const errorAnalysis = processErrorExecution(exec.data, workflowRaw);
+        return ok({
+          id: exec.id,
+          status: exec.status,
+          workflowId: exec.workflowId,
+          startedAt: exec.startedAt,
+          stoppedAt: exec.stoppedAt,
+          errorAnalysis,
+        });
+      }
+
+      // Default: summary mode
+      const result: Record<string, unknown> = {
+        id: exec.id,
+        finished: exec.finished,
+        status: exec.status,
+        mode: exec.mode,
+        startedAt: exec.startedAt,
+        stoppedAt: exec.stoppedAt,
+        workflowId: exec.workflowId,
+      };
+
+      if (includeData && exec.data) {
+        result.nodeData = extractExecutionRunData(exec.data);
+      }
+
+      return ok(result);
+    }
+
+    // action === "list"
     const resp = await this.api.listExecutions({
       workflowId: args.workflowId as string | undefined,
       status: args.status as string | undefined,
@@ -850,33 +963,6 @@ export class ToolHandlers {
       count: executions.length,
       ...(resp.nextCursor ? { nextCursor: resp.nextCursor } : {}),
     });
-  }
-
-  private async getExecution(
-    args: Record<string, unknown>
-  ): Promise<ToolResult> {
-    const id = args.id as string;
-    if (!id) return err("Missing execution ID");
-
-    const includeData = (args.includeData as boolean) ?? false;
-    const exec = await this.api.getExecution(id, includeData);
-
-    const result: Record<string, unknown> = {
-      id: exec.id,
-      finished: exec.finished,
-      status: exec.status,
-      mode: exec.mode,
-      startedAt: exec.startedAt,
-      stoppedAt: exec.stoppedAt,
-      workflowId: exec.workflowId,
-    };
-
-    // If data requested, extract and return structured node outputs
-    if (includeData && exec.data) {
-      result.nodeData = extractExecutionRunData(exec.data);
-    }
-
-    return ok(result);
   }
 
   // ---- Webhook trigger ----
@@ -979,9 +1065,47 @@ export class ToolHandlers {
           `No path found from "${range.from}" to "${range.to}"`
         );
       }
+    } else if (args.expandFrom) {
+      // Expand mode (absorbs expand_focus functionality)
+      const currentFocus = args.expandFrom as string[];
+      const flow = simplifyConnections(raw.connections);
+      const { forward, reverse } = buildAdjacency(flow);
+
+      const expanded = new Set(currentFocus);
+
+      if (args.addNodes) {
+        const addNodes = args.addNodes as string[];
+        const allNames = new Set(raw.nodes.map((n) => n.name));
+        for (const name of addNodes) {
+          if (!allNames.has(name)) {
+            return err(`Node not found: "${name}"`);
+          }
+          expanded.add(name);
+        }
+      }
+
+      if (args.expandUpstream) {
+        const depth = args.expandUpstream as number;
+        const upstream = bfsBackward(Array.from(expanded), reverse, {
+          maxDepth: depth,
+          excludeNodes: expanded,
+        });
+        for (const name of upstream) expanded.add(name);
+      }
+
+      if (args.expandDownstream) {
+        const depth = args.expandDownstream as number;
+        const downstream = bfsForward(Array.from(expanded), forward, {
+          maxDepth: depth,
+          excludeNodes: expanded,
+        });
+        for (const name of downstream) expanded.add(name);
+      }
+
+      focusedNodeNames = Array.from(expanded);
     } else {
       return err(
-        "Provide one of: nodes (explicit names), branch (auto-discover), or range (from/to)"
+        "Provide one of: nodes (explicit names), branch (auto-discover), range (from/to), or expandFrom (expand previous focus)"
       );
     }
 
@@ -1005,59 +1129,7 @@ export class ToolHandlers {
     return ok(focused);
   }
 
-  // ---- Expand focus (iterative refinement) ----
-  private async expandFocus(
-    args: Record<string, unknown>
-  ): Promise<ToolResult> {
-    const id = args.id as string;
-    if (!id) return err("Missing workflow ID");
 
-    const currentFocus = args.currentFocus as string[];
-    if (!currentFocus || currentFocus.length === 0) {
-      return err("Missing currentFocus: provide the current focused node names");
-    }
-
-    const raw = await this.api.getWorkflow(id);
-    const flow = simplifyConnections(raw.connections);
-    const { forward, reverse } = buildAdjacency(flow);
-
-    const expanded = new Set(currentFocus);
-
-    // Add explicit nodes
-    if (args.addNodes) {
-      const addNodes = args.addNodes as string[];
-      const allNames = new Set(raw.nodes.map((n) => n.name));
-      for (const name of addNodes) {
-        if (!allNames.has(name)) {
-          return err(`Node not found: "${name}"`);
-        }
-        expanded.add(name);
-      }
-    }
-
-    // Expand upstream
-    if (args.expandUpstream) {
-      const depth = args.expandUpstream as number;
-      const upstream = bfsBackward(Array.from(expanded), reverse, {
-        maxDepth: depth,
-        excludeNodes: expanded,
-      });
-      for (const name of upstream) expanded.add(name);
-    }
-
-    // Expand downstream
-    if (args.expandDownstream) {
-      const depth = args.expandDownstream as number;
-      const downstream = bfsForward(Array.from(expanded), forward, {
-        maxDepth: depth,
-        excludeNodes: expanded,
-      });
-      for (const name of downstream) expanded.add(name);
-    }
-
-    const focused = buildFocusedView(raw, Array.from(expanded));
-    return ok(focused);
-  }
 
   // ---- Search nodes (Pilar 3: Anti-Hallucination) ----
   private async searchNodes(
@@ -1137,6 +1209,15 @@ export class ToolHandlers {
         ...(p.req ? { required: true } : {}),
         ...(p.opts ? { options: p.opts.map((o) => `${o.v} (${o.l})`) } : {}),
         ...(p.show ? { showWhen: p.show } : {}),
+        ...(p.hide ? { hideWhen: p.hide } : {}),
+        ...(p.sub ? { subProperties: p.sub.map((s) => ({
+          name: s.n,
+          displayName: s.dn,
+          type: s.t,
+          ...(s.desc ? { description: s.desc } : {}),
+          ...(s.def !== undefined ? { default: s.def } : {}),
+          ...(s.opts ? { options: s.opts.map((o) => `${o.v} (${o.l})`) } : {}),
+        })) } : {}),
       }));
 
       // Generate example config from required + default properties
@@ -1164,13 +1245,63 @@ export class ToolHandlers {
   // Pilar 2: Version Control handlers
   // ============================================================
 
-  // ---- List snapshots ----
-  private async listVersions(
+  // ---- Versions (unified: list + rollback) ----
+  private async versions(
     args: Record<string, unknown>
   ): Promise<ToolResult> {
+    const action = (args.action as string) ?? "list";
     const workflowId = args.workflowId as string;
     if (!workflowId) return err("Missing workflowId");
 
+    if (action === "rollback") {
+      const snapshotId = args.snapshotId as string;
+      if (!snapshotId) return err("Missing snapshotId (required for action=rollback)");
+
+      const snapshot = this.versionStore.getSnapshot(workflowId, snapshotId);
+      if (!snapshot) {
+        return err(
+          `Snapshot "${snapshotId}" not found for workflow "${workflowId}". Use versions(action:"list") to see available snapshots.`
+        );
+      }
+
+      // Safety snapshot of current state before rolling back
+      try {
+        const currentRaw = await this.api.getWorkflow(workflowId);
+        this.versionStore.saveSnapshot(
+          workflowId,
+          currentRaw,
+          "manual",
+          `Safety snapshot before rollback to ${snapshotId}`
+        );
+      } catch {
+        // Proceed with rollback anyway
+      }
+
+      const { data } = snapshot;
+      const updatePayload: Partial<N8nWorkflowRaw> = {
+        name: data.name,
+        nodes: data.nodes,
+        connections: data.connections,
+      };
+      if (data.settings) updatePayload.settings = data.settings;
+
+      const updated = await this.api.updateWorkflow(workflowId, updatePayload);
+
+      return ok({
+        id: updated.id,
+        name: updated.name,
+        active: updated.active,
+        nodeCount: updated.nodes?.length ?? 0,
+        restoredFrom: {
+          snapshotId: snapshot.id,
+          timestamp: snapshot.timestamp,
+          description: snapshot.description,
+        },
+        message: "Workflow restored successfully. A safety snapshot of the previous state was created.",
+      });
+    }
+
+    // action === "list"
     const limit = args.limit as number | undefined;
     const snapshots = this.versionStore.listSnapshots(workflowId, limit);
 
@@ -1190,68 +1321,34 @@ export class ToolHandlers {
     });
   }
 
-  // ---- Rollback to snapshot ----
-  private async rollbackWorkflow(
-    args: Record<string, unknown>
-  ): Promise<ToolResult> {
-    const workflowId = args.workflowId as string;
-    if (!workflowId) return err("Missing workflowId");
+  // ============================================================
+  // Pilar 3: Knowledge Base (unified handler)
+  // ============================================================
 
-    const snapshotId = args.snapshotId as string;
-    if (!snapshotId) return err("Missing snapshotId");
+  private knowledge(args: Record<string, unknown>): ToolResult {
+    const topic = args.topic as string;
+    const action = (args.action as string) ?? "search";
 
-    // Get the snapshot with full data
-    const snapshot = this.versionStore.getSnapshot(workflowId, snapshotId);
-    if (!snapshot) {
-      return err(
-        `Snapshot "${snapshotId}" not found for workflow "${workflowId}". Use list_versions to see available snapshots.`
-      );
+    switch (topic) {
+      case "patterns":
+        if (action === "get") return this._getPattern(args);
+        return this._searchPatterns(args);
+      case "gotchas":
+        return this._getN8nKnowledge(args);
+      case "payloads":
+        return this._getPayloadSchema(args);
+      case "providers":
+        return this._listProviders();
+      case "expressions":
+        return this._searchExpressions(args);
+      default:
+        return err(`Unknown knowledge topic: "${topic}". Use: patterns, gotchas, payloads, providers, expressions`);
     }
-
-    // Take a safety snapshot of the CURRENT state before rolling back
-    try {
-      const currentRaw = await this.api.getWorkflow(workflowId);
-      this.versionStore.saveSnapshot(
-        workflowId,
-        currentRaw,
-        "manual",
-        `Safety snapshot before rollback to ${snapshotId}`
-      );
-    } catch {
-      // If we can't fetch current state, proceed with rollback anyway
-    }
-
-    // Restore the workflow from the snapshot
-    const { data } = snapshot;
-    const updatePayload: Partial<N8nWorkflowRaw> = {
-      name: data.name,
-      nodes: data.nodes,
-      connections: data.connections,
-    };
-    if (data.settings) updatePayload.settings = data.settings;
-
-    const updated = await this.api.updateWorkflow(workflowId, updatePayload);
-
-    return ok({
-      id: updated.id,
-      name: updated.name,
-      active: updated.active,
-      nodeCount: updated.nodes?.length ?? 0,
-      restoredFrom: {
-        snapshotId: snapshot.id,
-        timestamp: snapshot.timestamp,
-        description: snapshot.description,
-      },
-      message: "Workflow restored successfully. A safety snapshot of the previous state was created.",
-    });
   }
 
-  // ============================================================
-  // Pilar 3: Knowledge Base handlers
-  // ============================================================
+  // ---- Internal knowledge handlers ----
 
-  // ---- Search patterns ----
-  private searchPatterns(args: Record<string, unknown>): ToolResult {
+  private _searchPatterns(args: Record<string, unknown>): ToolResult {
     const query = (args.query as string) ?? "";
     const tags = args.tags as string[] | undefined;
 
@@ -1274,7 +1371,7 @@ export class ToolHandlers {
   }
 
   // ---- Get pattern ----
-  private getPattern(args: Record<string, unknown>): ToolResult {
+  private _getPattern(args: Record<string, unknown>): ToolResult {
     const id = args.id as string;
     if (!id) return err("Missing pattern id");
 
@@ -1298,7 +1395,7 @@ export class ToolHandlers {
   }
 
   // ---- Get payload schema ----
-  private getPayloadSchema(args: Record<string, unknown>): ToolResult {
+  private _getPayloadSchema(args: Record<string, unknown>): ToolResult {
     const provider = args.provider as string;
     if (!provider) return err("Missing provider. Use list_providers to see options.");
 
@@ -1338,7 +1435,7 @@ export class ToolHandlers {
   }
 
   // ---- Get n8n knowledge (gotchas) ----
-  private getN8nKnowledge(args: Record<string, unknown>): ToolResult {
+  private _getN8nKnowledge(args: Record<string, unknown>): ToolResult {
     const query = args.query as string | undefined;
     const nodeType = args.nodeType as string | undefined;
 
@@ -1374,7 +1471,7 @@ export class ToolHandlers {
   }
 
   // ---- List providers ----
-  private listProviders(): ToolResult {
+  private _listProviders(): ToolResult {
     const providers = knowledgeDb.listProviders();
     return ok({
       providers,
@@ -1384,7 +1481,7 @@ export class ToolHandlers {
   }
 
   // ---- Search expressions ----
-  private searchExpressions(args: Record<string, unknown>): ToolResult {
+  private _searchExpressions(args: Record<string, unknown>): ToolResult {
     const query = args.query as string | undefined;
     const category = args.category as string | undefined;
 
@@ -1421,6 +1518,115 @@ export class ToolHandlers {
   // ============================================================
   // Dry-Run: Test Node
   // ============================================================
+
+  // ---- Tool documentation ----
+  private toolsDocumentation(args: Record<string, unknown>): ToolResult {
+    const topic = args.topic as string | undefined;
+    const doc = getDocumentation(topic);
+    return ok(doc);
+  }
+
+  // ---- Autofix workflow ----
+  private async autofixWorkflow(
+    args: Record<string, unknown>
+  ): Promise<ToolResult> {
+    const id = args.id as string;
+    if (!id) return err("Missing workflow ID");
+
+    const raw = await this.api.getWorkflow(id);
+    const fixes = detectFixes(raw as Record<string, unknown>, {
+      fixTypes: args.fixTypes as string[] | undefined,
+      confidenceThreshold: args.confidenceThreshold as "high" | "medium" | "low" | undefined,
+    });
+
+    if (fixes.length === 0) {
+      return ok({
+        id,
+        fixes: [],
+        applied: false,
+        summary: "No fixable issues found",
+      });
+    }
+
+    if (args.applyFixes) {
+      // Save snapshot before modifying
+      this.versionStore.saveSnapshot(
+        id,
+        raw,
+        "manual",
+        `Pre-autofix snapshot (${fixes.length} fixes)`
+      );
+
+      const patched = applyFixes(raw as Record<string, unknown>, fixes);
+      await this.api.updateWorkflow(id, patched as Partial<N8nWorkflowRaw>);
+
+      return ok({
+        id,
+        fixes,
+        applied: true,
+        summary: `Applied ${fixes.length} fix(es). A snapshot was saved for rollback.`,
+      });
+    }
+
+    return ok({
+      id,
+      fixes,
+      applied: false,
+      summary: `Found ${fixes.length} fixable issue(s). Call again with applyFixes: true to apply.`,
+    });
+  }
+
+  // ---- Validate node config (pre-creation check) ----
+  private validateNode(args: Record<string, unknown>): ToolResult {
+    const rawType = args.nodeType as string;
+    if (!rawType) return err("Missing nodeType");
+
+    const nodeType = restoreNodeType(rawType);
+    const config = (args.config as Record<string, unknown>) ?? {};
+    const mode = (args.mode as string) ?? "full";
+
+    // Build a virtual node for validation
+    const virtualNode: VirtualNode = {
+      name: "__validate__",
+      type: nodeType,
+      typeVersion: 1,
+      parameters: config,
+    };
+
+    // Config validation (required fields, option values, resource/operation, types)
+    const configResult = validateNodeConfig(virtualNode);
+
+    // Expression validation (only in full mode)
+    let exprErrors: Array<{ type: string; node?: string; property?: string; message: string; fix?: string; suggestion?: string }> = [];
+    if (mode === "full") {
+      const exprResult = validateAllExpressions(config, "__validate__");
+      exprErrors = [...exprResult.errors, ...exprResult.warnings];
+    }
+
+    // Unify all as issues (never block — advisory only)
+    const issues = [
+      ...configResult.errors.map((e) => ({ severity: "error" as const, ...e })),
+      ...configResult.warnings.map((w) => ({ severity: "warning" as const, ...w })),
+      ...exprErrors.map((e) => ({ severity: "warning" as const, ...e })),
+    ];
+
+    // Clean up internal node name from output
+    for (const issue of issues) {
+      if (issue.node === "__validate__") issue.node = rawType;
+    }
+
+    const nodeInfo = nodeDb.getNode(nodeType);
+
+    return ok({
+      nodeType,
+      displayName: nodeInfo?.d ?? rawType,
+      issueCount: issues.length,
+      issues: issues.length > 0 ? issues : undefined,
+      summary: issues.length === 0
+        ? "Configuration looks valid against known schema"
+        : `Found ${issues.length} potential issue(s) — review before creating`,
+    });
+  }
 
   // ---- Approval mode toggle ----
   private setApprovalMode(args: Record<string, unknown>): ToolResult {
