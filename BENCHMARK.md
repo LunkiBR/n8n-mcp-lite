@@ -166,16 +166,36 @@ n8n-mcp identificou:
 
 ---
 
-### 4.3 Knowledge base exclusiva do lite
+### 4.3 Knowledge base — comparação honesta
+
+> ⚠️ **Nota importante:** o n8n-mcp tem uma SQLite de 71.7 MB que é o real "knowledge base" deles.
+> O lite extrai seus dados de nodes dessa mesma base. As comparações abaixo tratam de
+> **tipos diferentes de knowledge** — não é uma competição direta.
+
+**O que só o lite tem** (curado manualmente, contexto BR):
 
 | Topic | Conteúdo | Tokens estimados | Equivalente n8n-mcp |
 |-------|----------|------------------|--------------------|
 | `knowledge(gotchas)` | 16 gotchas curados: Switch fallthrough, AI Agent output field, session key, connection types, etc. | ~800 tok/busca | ❌ Não existe |
-| `knowledge(patterns)` | 6 padrões completos: WhatsApp+Evolution, Meta Cloud, AI Agent, Menu Bot | ~600 tok/busca | `search_templates` (retorna links, não configs prontas) |
+| `knowledge(patterns)` | 6 padrões completos com nodes[] e flow[] prontos para create_workflow | ~600 tok/busca | `search_templates` (retorna links, não configs prontas) |
 | `knowledge(expressions)` | Cookbook de expressões PT-BR por categoria | ~200 tok/busca | ❌ Não existe |
 | `knowledge(payloads)` | Schemas de webhook por provider (Evolution, Meta, etc.) | ~300 tok/busca | ❌ Não existe |
 
-**Gap estratégico:** Para o contexto de uso (bots WhatsApp, agentes com memória), a knowledge base do lite é uma vantagem competitiva significativa. Ela codifica ~80% dos erros de configuração mais comuns em forma consultável.
+**O que só o n8n-mcp tem** (dados ricos sobre os nodes em si):
+
+| Feature | n8n-mcp | n8n-mcp-lite |
+|---------|---------|-------------|
+| Histórico de versões por node | ✅ `get_node(mode:"versions")` | ❌ |
+| Breaking changes entre versões | ✅ `get_node(mode:"breaking")` | ❌ |
+| Migration hints automáticos | ✅ `get_node(mode:"migrations")` | ❌ |
+| Busca dentro dos campos de um node | ✅ `get_node(mode:"search_properties")` | ❌ |
+| Templates oficiais do n8n.io | ✅ `search_templates` + `deploy_template` | ❌ |
+| npm stats de nodes comunitários | ✅ (downloads, verified, autor) | ⚠️ básico |
+| Versão real por node | ✅ (extraída do pacote) | ❌ (`v:"1"` hardcoded — bug pendente) |
+
+**Dependência estrutural:**
+O `nodes.json` do lite é gerado a partir do `nodes.db` do n8n-mcp via `npm run build:nodes`.
+Se o n8n atualizar nodes com breaking changes, o lite fica desatualizado até um rebuild.
 
 ---
 
