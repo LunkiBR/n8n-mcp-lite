@@ -82,24 +82,60 @@ function extractPrimaryError(
     nodeType: "Unknown",
   };
 
-  if (!topError) return result;
+  if (topError) {
+    result.message = (topError.message as string) ?? "Unknown error";
+    result.errorType = (topError.name as string) ?? "Unknown";
 
-  result.message = (topError.message as string) ?? "Unknown error";
-  result.errorType = (topError.name as string) ?? "Unknown";
+    // Extract node info from the error object
+    const errorNode = topError.node as Record<string, unknown> | undefined;
+    if (errorNode) {
+      result.nodeName = (errorNode.name as string) ?? "Unknown";
+      result.nodeType = (errorNode.type as string) ?? "Unknown";
+    }
 
-  // Extract node info from the error object
-  const errorNode = topError.node as Record<string, unknown> | undefined;
-  if (errorNode) {
-    result.nodeName = (errorNode.name as string) ?? "Unknown";
-    result.nodeType = (errorNode.type as string) ?? "Unknown";
+    // HTTP-specific error details
+    if (topError.httpCode !== undefined) {
+      result.httpCode = topError.httpCode as number;
+    }
+    if (topError.description) {
+      result.description = String(topError.description).slice(0, 500);
+    }
   }
 
-  // HTTP-specific error details
-  if (topError.httpCode !== undefined) {
-    result.httpCode = topError.httpCode as number;
-  }
-  if (topError.description) {
-    result.description = String(topError.description).slice(0, 500);
+  // Fallback: scan runData for the node that actually errored (most recent by startTime)
+  // This handles cases where resultData.error doesn't have node info
+  if (result.nodeName === "Unknown" && runData) {
+    let latestErrorTime = -1;
+
+    for (const [nodeName, runs] of Object.entries(runData)) {
+      if (!Array.isArray(runs) || runs.length === 0) continue;
+      const lastRun = runs[runs.length - 1] as Record<string, unknown>;
+      if (!lastRun.error) continue;
+
+      const startTime = (lastRun.startTime as number) ?? 0;
+      if (startTime > latestErrorTime) {
+        latestErrorTime = startTime;
+        const nodeError = lastRun.error as Record<string, unknown> | string;
+        result.nodeName = nodeName;
+
+        if (typeof nodeError === "object" && nodeError !== null) {
+          if (result.message === "Unknown error") {
+            result.message = (nodeError.message as string) ?? "Unknown error";
+          }
+          if (result.errorType === "Unknown") {
+            result.errorType = (nodeError.name as string) ?? "Unknown";
+          }
+          if (nodeError.httpCode !== undefined && result.httpCode === undefined) {
+            result.httpCode = nodeError.httpCode as number;
+          }
+          if (nodeError.description && !result.description) {
+            result.description = String(nodeError.description).slice(0, 500);
+          }
+        } else if (typeof nodeError === "string" && result.message === "Unknown error") {
+          result.message = nodeError;
+        }
+      }
+    }
   }
 
   // Enrich from node-level runData error (often has more detail)

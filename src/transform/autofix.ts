@@ -214,8 +214,8 @@ function detectTypeVersionFix(
     nodeName,
     before: currentVersion,
     after: maxVersion,
-    confidence: "high",
-    description: `typeVersion ${currentVersion} exceeds known max (${maxVersion}) for ${nodeType}. Downgrading to avoid runtime errors.`,
+    confidence: "low",
+    description: `typeVersion ${currentVersion} exceeds known max (${maxVersion}) for ${nodeType}. Note: version data may be incomplete — only apply if the workflow fails to load.`,
   });
 }
 

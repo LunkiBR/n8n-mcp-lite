@@ -93,10 +93,6 @@ function coerceArgs(args: Record<string, unknown>): void {
       continue;
     }
 
-    // Integers (only pure digit strings)
-    if (/^\d+$/.test(value) && value.length < 16) {
-      args[key] = parseInt(value, 10);
-    }
   }
 }
 
